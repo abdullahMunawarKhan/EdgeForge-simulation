@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# EdgeForge – starter Python dependencies
+# ---------------------------------------------------------------------------
+# Notes:
+#   * Do NOT add the CARLA Python API egg/wheel here.  Install it manually
+#     or via pip according to the CARLA version you are running.
+#   * torch + torchvision pins are intentionally loose.  Pin them in your
+#     own environment if you need a specific CUDA build.
+# ---------------------------------------------------------------------------
+
+# ---- Core numerics / imaging ---------------------------------------------
+numpy>=1.24
+opencv-python>=4.8
+
+# ---- Typed configuration & data models -----------------------------------
+pydantic>=2.5
+pydantic-settings>=2.1
+python-dotenv>=1.0
+
+# ---- Logging --------------------------------------------------------------
+loguru>=0.7
+
+# ---- Future FastAPI web layer --------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# ---- Future ML / perception ----------------------------------------------
+torch>=2.2
+torchvision>=0.17
+ultralytics>=8.1
+
+# ---- Testing --------------------------------------------------------------
+pytest>=8.0

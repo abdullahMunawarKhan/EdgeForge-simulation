@@ -1,0 +1,27 @@
+# ------------------------------------------------------------------------------
+# edgeforge/ subfolder ignores (keeps the module itself clean).
+#
+# The root .gitignore already covers most things; this file is a safety net so
+# even if someone clones just this folder or moves it, nothing sensitive leaks.
+# ------------------------------------------------------------------------------
+
+# --- Secrets & env (repeated here as belt-and-braces) ---
+.env
+.env.*
+!.env.example
+
+# --- Local logs + recordings ---
+logs/
+*.log
+runs/
+recordings/
+outputs/
+metrics/
+
+# --- Generated scenarios (keep the .gitkeep only) ---
+scenarios/generated/*.json
+!scenarios/generated/.gitkeep
+
+# --- Bytecode (belt-and-braces even though root covers it) ---
+__pycache__/
+*.pyc
