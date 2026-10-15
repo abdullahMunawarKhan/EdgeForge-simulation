@@ -1,48 +1,21 @@
-"""
-EdgeForge global configuration.
+"""Centralized configuration for EdgeForge.
 
-Uses pydantic-settings to load values from environment variables and .env files.
-CARLA-specific values live here so they can be overridden per deployment without
-touching the perception / analysis pipeline code.
-
-SIMULATION BACKENDS:
-  EdgeForge can run the scenario loop in three ways — selected via
-  --backend / --mock CLI flags or cfg["simulation"]["backend"] in the JSON:
-
-    1. "carla"  — real CARLA server (needs a running CarlaUE4.exe).
-       Server tips for Windows laptops with small VRAM:
-         * Launch with:
-             .\\CarlaUE4.exe -RenderOffscreen -quality-level=Low -nosound
-                  -benchmark -fps=10 -carla-map=/Game/Carla/Maps/Town01
-                  -NoTextureStreaming -FeatureLevelES31
-         * NVIDIA Control Panel → Max Frame Rate = 30, Shader Cache = 100MB
-         * Always use Town01 first (smallest map, ~50% less VRAM than Town03).
-
-    2. "mock"   — pure-Python synthetic simulation.  No CARLA server, no
-       CARLA wheel import needed for mock mode.  The ego/NPCs use a
-       kinematic integrator and the camera renders a synthetic image
-       (sky + perspective road + scrolling dashes + projected NPC car
-       boxes).  The exact same SensorFrame / VehicleState / DetectedObject
-       / RiskAssessment pydantic types flow through the pipeline, so
-       Persons 2, 3, 4 can develop on any laptop without installing
-       CARLA.  This is the default fallback when --backend=detect fails.
-
-    3. "detect" — try "carla"; on connect failure fall back to "mock"
-       with a warning.  Default.
-
-REMOTE / WSL2 CARLA HOSTS:
-  When running CARLA elsewhere (WSL2, cloud/Colab, a desktop):
-    1. Set the ENV VARs below (or edit .env):
-          CARLA_HOST=<ip or "wsl.localhost">
-          CARLA_PORT=2000
-    2. On the remote machine: run CarlaUE4.exe with extra flag
-          -carla-rpc-port=2000
-       and open TCP port 2000 + 2002 (for TM) in the firewall.
-    3. For WSL2: "wsl.localhost" resolves the WSL2 VM automatically;
-       if it doesn't, use `wsl hostname -I` and paste the IP into .env.
+This module intentionally loads the project-root .env file using python-dotenv
+before resolving settings so the runtime can connect to the remote CARLA host
+without hardcoded values scattered through the codebase.
 """
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, Literal
+
+from dotenv import load_dotenv
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 class Settings(BaseSettings):
@@ -55,7 +28,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -69,7 +42,6 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------
     # CARLA simulator connection
-    # TODO: Integrate CARLA synchronous mode + TrafficManager config here.
     # ------------------------------------------------------------------
     CARLA_HOST: str = "127.0.0.1"
     CARLA_PORT: int = 2000
@@ -77,24 +49,49 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------
     # Camera / sensor defaults
-    # TODO: Add LiDAR, IMU, GNSS sensor configs here as they are integrated.
     # ------------------------------------------------------------------
     CAMERA_WIDTH: int = 1280
     CAMERA_HEIGHT: int = 720
     CAMERA_FOV: int = 90
     CAMERA_TICK: float = 0.05  # seconds between camera captures (20 FPS)
 
+    LIDAR_CHANNELS: int = Field(default=32, gt=0)
+    LIDAR_POINTS_PER_SECOND: int = Field(default=56000, gt=0)
+    LIDAR_RANGE_M: float = Field(default=10.0, gt=0)
+
     # ------------------------------------------------------------------
     # Risk analysis
-    # TODO: Add per-object-type risk weight configuration here later.
     # ------------------------------------------------------------------
     RISK_THRESHOLD: float = 0.7
+    RISK_OBJECT_WEIGHTS: Dict[str, float] = {
+        "pedestrian": 1.5,
+        "bicycle": 1.2,
+        "car": 1.0,
+    }
 
     # ------------------------------------------------------------------
     # Perception
-    # TODO: Add YOLO model path / confidence threshold / NMS config here.
     # ------------------------------------------------------------------
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
+    YOLO_MODEL_PATH: str = "yolov8n.pt"
+    YOLO_NMS_IOU: float = Field(default=0.7, gt=0, le=1)
+    YOLO_DEVICE: Literal["cpu", "cuda"] = "cpu"
+
+    # ------------------------------------------------------------------
+    # Outputs
+    # ------------------------------------------------------------------
+    LOG_DIR: str = "logs"
+    RUN_DIR: str = "runs"
+    METRICS_FORMAT: Literal["csv", "parquet"] = "csv"
+
+    @field_validator("RISK_OBJECT_WEIGHTS")
+    @classmethod
+    def check_weights_positive(cls, value: Dict[str, float]) -> Dict[str, float]:
+        """Reject zero or negative weights."""
+        for name, weight in value.items():
+            if weight <= 0:
+                raise ValueError(f"weight for {name!r} must be > 0")
+        return value
 
 
 settings = Settings()
