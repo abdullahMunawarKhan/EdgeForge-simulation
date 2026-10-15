@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from edgeforge.config.settings import settings
+from edgeforge.data.models import DetectedObject
 from edgeforge.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,20 +62,17 @@ class ObjectDetector:
     Accepts BGR frames, runs YOLO inference, filters for relevant traffic
     participants, and returns RawDetection primitives.
 
-    Compatibility behavior:
-      * When ``model_name`` is None (default), operates in placeholder mode
-        (``model_loaded=False``, ``detect()`` returns []), preserving foundation tests.
-      * When ``model_name`` is provided (e.g. ``"yolov8n.pt"``), loads and runs
-        the Ultralytics model on the specified device (CPU by default).
+    Model path, confidence threshold, NMS IoU, and device default to centralized
+    settings. Pass ``model_name=None`` explicitly to disable inference.
     """
 
-    DEFAULT_MODEL: str = "yolov8n.pt"
+    DEFAULT_MODEL: str = settings.YOLO_MODEL_PATH
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
+        model_name: Optional[str] = settings.YOLO_MODEL_PATH,
         confidence_threshold: Optional[float] = None,
-        device: str = "cpu",
+        device: Optional[str] = None,
         model: Optional[Any] = None,
         lazy_load: bool = True,
     ) -> None:
@@ -84,7 +82,7 @@ class ObjectDetector:
             if confidence_threshold is not None
             else settings.DETECTION_CONFIDENCE_THRESHOLD
         )
-        self.device = device
+        self.device = device if device is not None else settings.YOLO_DEVICE
         self._model = model
         self._model_loaded = model is not None
         self._initialized = True
@@ -151,7 +149,11 @@ class ObjectDetector:
                 f"detect() received non-numpy frame: {type(frame).__name__}; returning []"
             )
             return []
-        if frame.size == 0 or frame.ndim not in (2, 3):
+        if (
+            frame.size == 0
+            or frame.ndim not in (2, 3)
+            or (frame.ndim == 3 and frame.shape[2] not in (1, 3))
+        ):
             logger.warning(
                 f"detect() received invalid frame shape={getattr(frame, 'shape', None)}; returning []"
             )
@@ -185,6 +187,7 @@ class ObjectDetector:
             results = self._model(
                 frame,
                 conf=self.confidence_threshold,
+                iou=settings.YOLO_NMS_IOU,
                 device=self.device,
                 verbose=False,
             )
@@ -261,6 +264,19 @@ class ObjectDetector:
 
         self._detection_count += 1
         return detections
+
+    def detect_objects(self, frame: Any) -> List[DetectedObject]:
+        """Return detections as shared data models without inferred motion data."""
+        return [
+            DetectedObject(
+                object_type=detection.object_type,
+                confidence=detection.confidence,
+                bbox=list(detection.bbox),
+                distance=None,
+                relative_speed=None,
+            )
+            for detection in self.detect(frame)
+        ]
 
     def get_status(self) -> Dict[str, Any]:
         """Return a short human/JSON friendly status report."""

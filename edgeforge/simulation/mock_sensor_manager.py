@@ -17,10 +17,8 @@ frame, which is essential when testing Detector + HUD + CV2 windows.
 
 Synthetic ground-truth detections (``latest_ground_truth_objects`` list)
 are produced each RGB push — same world-space NPCs that are drawn into
-the frame.  This lets the pipeline produce non-trivial DetectedObject →
-RiskAssessment values *before* Person 2 wires real YOLO.  Callers in
-main.py can optionally treat ``sm.latest_ground_truth_objects`` as the
-"oracle detector" for mock demos.
+the frame.  Callers in main.py can use these values as an "oracle detector"
+when configured YOLO does not recognize the synthetic rendering.
 """
 
 from __future__ import annotations

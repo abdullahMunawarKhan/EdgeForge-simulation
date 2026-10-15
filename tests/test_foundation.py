@@ -65,7 +65,7 @@ def test_camera_processor_resize() -> None:
 
 # ---- ObjectDetector ---------------------------------------------------------
 def test_detector_returns_empty_list_on_valid_frame() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     result = det.detect(frame)
     assert isinstance(result, list)
@@ -73,12 +73,12 @@ def test_detector_returns_empty_list_on_valid_frame() -> None:
 
 
 def test_detector_handles_none_gracefully() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     assert det.detect(None) == []
 
 
 def test_detector_status_shows_no_model_loaded() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     status = det.get_status()
     assert status["module"] == "object_detector"
     assert status["model_loaded"] is False
@@ -112,6 +112,15 @@ def test_risk_engine_close_and_climbing_is_high_or_critical() -> None:
     assert out.risk_score >= 0.55
     assert "danger" in out.contributing_objects
     assert len(out.reason) > 0
+
+
+def test_risk_engine_handles_unknown_detection_distance_and_speed() -> None:
+    out = RiskEngine().calculate_risk(
+        [DetectedObject(object_type="car", distance=None, relative_speed=None)],
+        VehicleState(),
+    )
+    assert out.risk_score == pytest.approx(0.0)
+    assert "risk assessment is incomplete" in out.reason
 
 
 def test_risk_level_enum_values() -> None:

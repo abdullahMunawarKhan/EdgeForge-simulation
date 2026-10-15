@@ -73,10 +73,11 @@ class Settings(BaseSettings):
     # Perception
     # ------------------------------------------------------------------
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
-<<<<<<< HEAD
     YOLO_MODEL_PATH: str = "yolov8n.pt"
     YOLO_NMS_IOU: float = Field(default=0.7, gt=0, le=1)
     YOLO_DEVICE: Literal["cpu", "cuda"] = "cpu"
+    TRACKER_IOU_THRESHOLD: float = 0.3
+    TRACKER_MAX_AGE: int = 5
 
     # ------------------------------------------------------------------
     # Outputs
@@ -93,10 +94,5 @@ class Settings(BaseSettings):
             if weight <= 0:
                 raise ValueError(f"weight for {name!r} must be > 0")
         return value
-=======
-    TRACKER_IOU_THRESHOLD: float = 0.3
-    TRACKER_MAX_AGE: int = 5
->>>>>>> 1e8e30d794eb3de97f7c86883dfbdd7b1f7caa7b
-
 
 settings = Settings()
