@@ -175,8 +175,7 @@ def run_demo() -> int:
     # ---- 3c. ObjectDetector --------------------------------------------
     print("\n[ObjectDetector demo]")
     detections = detector.detect(frame)
-    print(f"  Detection count (placeholder): {len(detections)} "
-          f"(expected 0 – real YOLO not yet integrated)")
+    print(f"  Detection count from {settings.YOLO_MODEL_PATH}: {len(detections)}")
     assert isinstance(detections, list), "detect() must return a list"
 
     status_after = detector.get_status()
@@ -211,7 +210,7 @@ def run_demo() -> int:
     logger.success("✅ EdgeForge demo pipeline completed successfully.")
     print("\n✅ All checks passed – platform foundation is ready.")
     print("   Next step (Person 1): run `python main.py --sim` with CARLA server live.")
-    print("   Next step (Person 2): wire real YOLOv8 into perception/detector.py.")
+    print("   YOLO model, confidence, and device are configurable in the root .env.")
     return 0
 
 
@@ -317,14 +316,8 @@ def run_simulation(
     last_risk = None
     last_detections: List[DetectedObject] = []
     # ---------------------------------------------------------------------
-    # When running MOCK backend: the synthetic RGB frame already has the
-    # coloured NPC boxes drawn *visually*, but the real ObjectDetector
-    # returns an empty list (Person 2's YOLO isn't integrated yet).  To
-    # make Person 3's RiskEngine *actually produce MEDIUM/HIGH risk* in
-    # the demo, we fall back to the mock sensor's ground-truth detections
-    # whenever the real detector says "nothing".  This is a deliberate
-    # demo-mode short circuit and can be removed as soon as Person 2
-    # plugs a real YOLO into detector.py.
+    # When running MOCK backend, use synthetic ground truth if configured
+    # YOLO does not detect the visually rendered NPCs in the mock frame.
     # ---------------------------------------------------------------------
     USE_MOCK_GROUND_TRUTH_AS_DETECTOR = runner.backend == "mock"
 

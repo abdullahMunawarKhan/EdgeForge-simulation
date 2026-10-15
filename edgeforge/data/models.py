@@ -63,8 +63,8 @@ class DetectedObject(BaseModel):
     object_id: str = Field(default_factory=lambda: f"obj_{id(object).__str__()}")
     object_type: str = "unknown"  # e.g. "car", "pedestrian", "bicycle", ...
     confidence: float = 0.0  # 0..1
-    distance: float = 0.0  # meters from ego vehicle
-    relative_speed: float = 0.0  # m/s, positive = object moving away
+    distance: Optional[float] = None  # meters from ego vehicle, when estimated
+    relative_speed: Optional[float] = None  # m/s, when estimated
     bbox: Optional[List[float]] = None  # [x1, y1, x2, y2] in pixel coords
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 

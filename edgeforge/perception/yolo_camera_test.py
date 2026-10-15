@@ -1,30 +1,63 @@
 
 import queue
+import sys
+import time
+from pathlib import Path
+from typing import Sequence
 
-import carla
 import cv2
 import numpy as np
-import torch
-from ultralytics import YOLO
 
-HOST = "192.168.97.250"
-PORT = 2000
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-WIDTH = 640
-HEIGHT = 480
-MODEL_NAME = "yolo26n.pt"
+from edgeforge.config.settings import settings
+from edgeforge.data.models import DetectedObject
+from edgeforge.perception.detector import ObjectDetector
+from edgeforge.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+DETECTION_LOG_INTERVAL_SECONDS = 2.0
+
+
+def render_detections(
+    frame: np.ndarray,
+    detections: Sequence[DetectedObject],
+) -> np.ndarray:
+    """Draw converted YOLO detections over a copy of the camera frame."""
+    annotated = frame.copy()
+    for detection in detections:
+        if detection.bbox is None or len(detection.bbox) != 4:
+            continue
+
+        x1, y1, x2, y2 = (int(value) for value in detection.bbox)
+        label = f"{detection.object_type} {detection.confidence:.2f}"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            2,
+        )
+    return annotated
 
 
 def main():
-    device = 0 if torch.cuda.is_available() else "cpu"
-    print("Inference device:", torch.cuda.get_device_name(0)
-          if device == 0 else "CPU")
+    import carla
 
-    print(f"Loading {MODEL_NAME}...")
-    model = YOLO(MODEL_NAME)
+    detector = ObjectDetector()
+    print(
+        f"YOLO model: {detector.model_name}; "
+        f"confidence: {detector.confidence_threshold}; device: {detector.device}"
+    )
 
-    client = carla.Client(HOST, PORT)
-    client.set_timeout(15.0)
+    client = carla.Client(settings.CARLA_HOST, settings.CARLA_PORT)
+    client.set_timeout(settings.CARLA_TIMEOUT)
     world = client.get_world()
     library = world.get_blueprint_library()
 
@@ -45,9 +78,9 @@ def main():
             return
 
         camera_bp = library.find("sensor.camera.rgb")
-        camera_bp.set_attribute("image_size_x", str(WIDTH))
-        camera_bp.set_attribute("image_size_y", str(HEIGHT))
-        camera_bp.set_attribute("fov", "90")
+        camera_bp.set_attribute("image_size_x", str(settings.CAMERA_WIDTH))
+        camera_bp.set_attribute("image_size_y", str(settings.CAMERA_HEIGHT))
+        camera_bp.set_attribute("fov", str(settings.CAMERA_FOV))
 
         transform = carla.Transform(
             carla.Location(x=1.5, z=2.4)
@@ -77,6 +110,7 @@ def main():
 
         camera.listen(on_image)
         print("YOLO running. Press Q to quit.")
+        last_detection_log = 0.0
 
         while True:
             try:
@@ -85,15 +119,25 @@ def main():
                 print("No camera frames received.")
                 break
 
-            results = model.predict(
-                source=frame,
-                device=device,
-                imgsz=640,
-                conf=0.35,
-                verbose=False,
-            )
+            # detect_objects() explicitly converts detect()'s RawDetection
+            # values into the DetectedObject interface used by this renderer.
+            detections = detector.detect_objects(frame)
+            annotated = render_detections(frame, detections)
 
-            annotated = results[0].plot()
+            now = time.monotonic()
+            if now - last_detection_log >= DETECTION_LOG_INTERVAL_SECONDS:
+                summary = ", ".join(
+                    f"{detection.object_type}={detection.confidence:.2f}"
+                    for detection in detections
+                )
+                logger.info(
+                    "YOLO inference: model_loaded={}, detections={}{}",
+                    detector.get_status()["model_loaded"],
+                    len(detections),
+                    f" [{summary}]" if summary else "",
+                )
+                last_detection_log = now
+
             cv2.imshow("EdgeForge - Live YOLO Detection", annotated)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):

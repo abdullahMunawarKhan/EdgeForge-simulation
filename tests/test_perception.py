@@ -233,6 +233,12 @@ class TestObjectDetector:
     def valid_frame(self) -> np.ndarray:
         return np.zeros((480, 640, 3), dtype=np.uint8)
 
+    def test_model_and_device_default_to_settings(self) -> None:
+        detector = ObjectDetector()
+        assert detector.model_name == settings.YOLO_MODEL_PATH
+        assert detector.device == settings.YOLO_DEVICE
+        assert detector.confidence_threshold == settings.DETECTION_CONFIDENCE_THRESHOLD
+
     def test_model_none_placeholder_behavior(self, valid_frame: np.ndarray) -> None:
         det = ObjectDetector(model_name=None)
         status = det.get_status()
@@ -383,9 +389,38 @@ class TestObjectDetector:
         mock_model.assert_called_once_with(
             valid_frame,
             conf=0.72,
+            iou=settings.YOLO_NMS_IOU,
             device="cpu",
             verbose=False,
         )
+
+    def test_detect_objects_returns_shared_models_without_fake_motion(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        mock_result = self._create_mock_yolo_result([
+            {"cls_id": 2, "conf": 0.88, "xyxy": [10.0, 20.0, 50.0, 60.0]},
+        ])
+        mock_model = MagicMock(return_value=[mock_result])
+        detector = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
+
+        detections = detector.detect_objects(valid_frame)
+
+        assert len(detections) == 1
+        detection = detections[0]
+        assert isinstance(detection, DetectedObject)
+        assert detection.object_type == "car"
+        assert detection.confidence == pytest.approx(0.88)
+        assert detection.bbox == [10.0, 20.0, 50.0, 60.0]
+        assert detection.distance is None
+        assert detection.relative_speed is None
+
+    def test_detect_objects_returns_empty_for_no_yolo_boxes(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        mock_model = MagicMock(return_value=[self._create_mock_yolo_result([])])
+        detector = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
+
+        assert detector.detect_objects(valid_frame) == []
 
 
 # ==============================================================================
