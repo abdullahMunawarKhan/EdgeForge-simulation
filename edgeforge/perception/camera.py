@@ -9,6 +9,7 @@ can be developed and tested without a running simulator.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Optional, Tuple
 
 import cv2
@@ -31,18 +32,16 @@ class FrameInfo:
 
 
 class CameraProcessor:
-    """Lightweight frame preprocessing and validation helper.
+    """Lightweight frame preprocessing, validation, and camera calibration helper.
 
-    Responsibilities (starter):
+    Responsibilities:
       * Validate that an incoming frame is a well-formed numpy image.
-      * Extract frame metadata (width, height, channels).
+      * Extract frame metadata (width, height, channels, dtype).
       * Resize frames to a target size using OpenCV.
-
-    TODO:
-      * Color-space conversion (BGR <-> RGB, BGR -> grayscale, ...).
-      * Undistortion using calibration matrices.
-      * Region-of-interest extraction.
-      * Basic pre-processing (normalization, CLAHE, noise reduction).
+      * Color-space conversions (BGR <-> RGB, BGR -> grayscale).
+      * CLAHE contrast enhancement for challenging lighting conditions.
+      * Deterministic frame preprocessing pipeline.
+      * Pinhole camera intrinsic and focal-length calculations.
     """
 
     def __init__(self, default_width: int = 1280, default_height: int = 720) -> None:
@@ -66,7 +65,7 @@ class CameraProcessor:
             return False
         if frame.ndim not in (2, 3):
             return False
-        # OpenCV images are typically uint8; allow float32 for normalized frames.
+        # OpenCV images are typically uint8; allow float32/float64 for normalized frames.
         if frame.dtype not in (np.uint8, np.float32, np.float64):
             return False
         return True
@@ -84,6 +83,10 @@ class CameraProcessor:
         if frame.ndim not in (2, 3):
             raise ValueError(
                 f"Frame must be 2D (grayscale) or 3D (color), got {frame.ndim}D."
+            )
+        if frame.dtype not in (np.uint8, np.float32, np.float64):
+            raise ValueError(
+                f"Unsupported frame dtype: {frame.dtype}. Expected uint8, float32, or float64."
             )
 
     # ------------------------------------------------------------------
@@ -107,7 +110,7 @@ class CameraProcessor:
         )
 
     # ------------------------------------------------------------------
-    # Transformations
+    # Transformations & Color Conversions
     # ------------------------------------------------------------------
     def resize_frame(
         self,
@@ -123,7 +126,7 @@ class CameraProcessor:
         frame :
             Valid input frame.
         width, height :
-            Target size.  If omitted, the processor defaults are used.
+            Target size. If omitted, the processor defaults are used.
         interpolation :
             OpenCV interpolation flag (default: INTER_LINEAR).
         """
@@ -133,3 +136,131 @@ class CameraProcessor:
         resized = cv2.resize(frame, (w, h), interpolation=interpolation)
         logger.debug(f"Frame resized {frame.shape[:2]} -> {resized.shape[:2]}")
         return resized
+
+    def to_rgb(self, frame: np.ndarray) -> np.ndarray:
+        """Convert a BGR (or grayscale / BGRA) frame to RGB."""
+        self.validate_frame(frame)
+        if frame.ndim == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+        if frame.shape[2] == 3:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+        raise ValueError(f"Cannot convert {frame.shape[2]}-channel frame to RGB.")
+
+    def to_bgr(self, frame: np.ndarray) -> np.ndarray:
+        """Convert an RGB (or grayscale / RGBA) frame to BGR."""
+        self.validate_frame(frame)
+        if frame.ndim == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        if frame.shape[2] == 3:
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        raise ValueError(f"Cannot convert {frame.shape[2]}-channel frame to BGR.")
+
+    def to_grayscale(self, frame: np.ndarray) -> np.ndarray:
+        """Convert a BGR or BGRA frame to single-channel grayscale."""
+        self.validate_frame(frame)
+        if frame.ndim == 2:
+            return frame.copy()
+        if frame.shape[2] == 1:
+            return frame[:, :, 0].copy()
+        if frame.shape[2] == 3:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        raise ValueError(f"Cannot convert {frame.shape[2]}-channel frame to grayscale.")
+
+    def apply_clahe(
+        self,
+        frame: np.ndarray,
+        clip_limit: float = 2.0,
+        tile_grid_size: Tuple[int, int] = (8, 8),
+    ) -> np.ndarray:
+        """Apply Contrast Limited Adaptive Histogram Equalization (CLAHE).
+
+        Useful for enhancing object visibility under bad weather or uneven shadows.
+        """
+        self.validate_frame(frame)
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+        if frame.ndim == 2:
+            return clahe.apply(frame)
+        if frame.shape[2] == 1:
+            enhanced = clahe.apply(frame[:, :, 0])
+            return enhanced[:, :, np.newaxis]
+        # For 3-channel BGR: convert to LAB, equalize lightness, convert back
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        enhanced_l = clahe.apply(l_channel)
+        enhanced_lab = cv2.merge((enhanced_l, a_channel, b_channel))
+        return cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+
+    def preprocess_frame(
+        self,
+        frame: Any,
+        target_width: Optional[int] = None,
+        target_height: Optional[int] = None,
+        to_rgb: bool = False,
+        enhance_contrast: bool = False,
+    ) -> np.ndarray:
+        """Deterministic preprocessing pipeline.
+
+        Applies optional contrast enhancement, resizing, and color conversion.
+        """
+        self.validate_frame(frame)
+        processed = frame.copy()
+        if enhance_contrast:
+            processed = self.apply_clahe(processed)
+        if target_width is not None or target_height is not None:
+            processed = self.resize_frame(
+                processed, width=target_width, height=target_height
+            )
+        if to_rgb:
+            processed = self.to_rgb(processed)
+        return processed
+
+    # ------------------------------------------------------------------
+    # Camera Intrinsics
+    # ------------------------------------------------------------------
+    @staticmethod
+    def compute_focal_length(image_width: int, fov_degrees: float) -> float:
+        """Calculate pinhole focal length (in pixels) given image width and horizontal FOV.
+
+        Formula: f = (W / 2) / tan(FOV_rad / 2)
+        """
+        if image_width <= 0:
+            raise ValueError(f"Image width must be positive, got {image_width}")
+        if not (0 < fov_degrees < 180):
+            raise ValueError(f"FOV must be between 0 and 180 degrees, got {fov_degrees}")
+        fov_rad = math.radians(fov_degrees)
+        focal_length = (image_width / 2.0) / math.tan(fov_rad / 2.0)
+        return float(focal_length)
+
+    def get_camera_intrinsics(
+        self,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        fov_degrees: float = 90.0,
+    ) -> Tuple[float, np.ndarray]:
+        """Compute focal length and 3x3 camera intrinsic matrix K.
+
+        Matrix layout:
+            [[fx,  0, cx],
+             [ 0, fy, cy],
+             [ 0,  0,  1]]
+        """
+        w = width if width is not None else self.default_width
+        h = height if height is not None else self.default_height
+        focal_length = self.compute_focal_length(w, fov_degrees)
+        cx = w / 2.0
+        cy = h / 2.0
+        intrinsic_matrix = np.array(
+            [
+                [focal_length, 0.0, cx],
+                [0.0, focal_length, cy],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        return focal_length, intrinsic_matrix
