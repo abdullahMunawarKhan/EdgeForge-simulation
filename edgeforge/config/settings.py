@@ -42,6 +42,9 @@ REMOTE / WSL2 CARLA HOSTS:
        if it doesn't, use `wsl hostname -I` and paste the IP into .env.
 """
 
+from typing import Dict, Literal
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,24 +80,54 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------
     # Camera / sensor defaults
-    # TODO: Add LiDAR, IMU, GNSS sensor configs here as they are integrated.
     # ------------------------------------------------------------------
     CAMERA_WIDTH: int = 1280
     CAMERA_HEIGHT: int = 720
     CAMERA_FOV: int = 90
     CAMERA_TICK: float = 0.05  # seconds between camera captures (20 FPS)
 
+    # NEW: LiDAR block (gt=0 means "must be greater than 0")
+    LIDAR_CHANNELS: int = Field(default=32, gt=0)
+    LIDAR_POINTS_PER_SECOND: int = Field(default=56000, gt=0)
+    LIDAR_RANGE_M: float = Field(default=10.0, gt=0)
+
     # ------------------------------------------------------------------
     # Risk analysis
-    # TODO: Add per-object-type risk weight configuration here later.
     # ------------------------------------------------------------------
     RISK_THRESHOLD: float = 0.7
 
+    # NEW: per-object-type weights (keys must be these exact words)
+    RISK_OBJECT_WEIGHTS: Dict[str, float] = {
+        "pedestrian": 1.5,
+        "bicycle": 1.2,
+        "car": 1.0,
+    }
+
     # ------------------------------------------------------------------
     # Perception
-    # TODO: Add YOLO model path / confidence threshold / NMS config here.
     # ------------------------------------------------------------------
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
+
+    # NEW: YOLO block (Literal means only these exact values are allowed)
+    YOLO_MODEL_PATH: str = "yolov8n.pt"
+    YOLO_NMS_IOU: float = Field(default=0.7, gt=0, le=1)
+    YOLO_DEVICE: Literal["cpu", "cuda"] = "cpu"
+
+    # ------------------------------------------------------------------
+    # NEW: Outputs
+    # ------------------------------------------------------------------
+    LOG_DIR: str = "logs"
+    RUN_DIR: str = "runs"
+    METRICS_FORMAT: Literal["csv", "parquet"] = "csv"
+
+    @field_validator("RISK_OBJECT_WEIGHTS")
+    @classmethod
+    def check_weights_positive(cls, value: Dict[str, float]) -> Dict[str, float]:
+        """Reject zero or negative weights."""
+        for name, weight in value.items():
+            if weight <= 0:
+                raise ValueError(f"weight for {name!r} must be > 0")
+        return value
 
 
 settings = Settings()
