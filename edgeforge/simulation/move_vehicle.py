@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from edgeforge.config.settings import settings
 
-DISTANCE_METERS = 5.0
+DISTANCE_METERS = 30.0
 TARGET_SPEED = 2.0  # m/s, approximately 7.2 km/h
 
 
@@ -30,11 +30,11 @@ def main():
     vehicle = vehicles[0]
     start = vehicle.get_location()
 
-    print(f"Moving vehicle {vehicle.id} for 5 metres...")
+    print(f"Moving vehicle {vehicle.id} forwards for {DISTANCE_METERS:.0f} metres...")
 
     vehicle.set_autopilot(False)
     vehicle.apply_control(
-        carla.VehicleControl(throttle=0.25, steer=0.0)
+        carla.VehicleControl(throttle=0.25, steer=0.0, reverse=False)
     )
 
     try:
