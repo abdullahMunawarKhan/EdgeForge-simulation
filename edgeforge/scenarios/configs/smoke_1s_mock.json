@@ -1,0 +1,28 @@
+{
+  "name": "smoke_1s_mock",
+  "description": "CI/CLI smoke test – 1s duration, tiny RGB, 2 NPC cars, mock backend.",
+  "version": "1.0",
+  "weather": "ClearNoon",
+  "map": "Town01",
+  "simulation": {"backend": "mock"},
+  "duration_seconds": 1.0,
+  "traffic": {"vehicles": 2, "pedestrians": 0, "bicycles": 0},
+  "ego_vehicle": {
+    "model": "vehicle.toyota.prius",
+    "spawn_point_index": 0,
+    "speed_limit": 50,
+    "autopilot": true
+  },
+  "sensors": {
+    "rgb_camera":   {"enabled": true,  "width": 256, "height": 192, "fov": 90, "tick": 0.1},
+    "lidar":        {"enabled": false},
+    "imu":          {"enabled": false},
+    "gnss":         {"enabled": false},
+    "collision":    {"enabled": true},
+    "lane_invasion":{"enabled": true}
+  },
+  "risk_analysis": {
+    "enabled": true,
+    "threshold": 0.7
+  }
+}

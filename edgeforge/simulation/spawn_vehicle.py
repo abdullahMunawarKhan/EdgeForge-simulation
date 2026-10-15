@@ -2,7 +2,6 @@ import carla
 import random
 import time
 
-
 def main():
     client = carla.Client("127.0.0.1", 2000)
     client.set_timeout(10.0)
