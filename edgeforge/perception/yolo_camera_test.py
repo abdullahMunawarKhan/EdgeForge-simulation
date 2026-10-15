@@ -1,4 +1,3 @@
-
 import queue
 import sys
 import time
@@ -20,7 +19,6 @@ from edgeforge.utils.logger import get_logger
 logger = get_logger(__name__)
 
 DETECTION_LOG_INTERVAL_SECONDS = 2.0
-
 
 def render_detections(
     frame: np.ndarray,
@@ -62,8 +60,11 @@ def main():
     library = world.get_blueprint_library()
 
     vehicle = None
-    camera = None
-    frames = queue.Queue(maxsize=1)
+    cameras = {}
+    frames = {
+        "front": queue.Queue(maxsize=1),
+        "side": queue.Queue(maxsize=1),
+    }
 
     try:
         vehicle_bp = library.find("vehicle.tesla.model3")
@@ -82,47 +83,68 @@ def main():
         camera_bp.set_attribute("image_size_y", str(settings.CAMERA_HEIGHT))
         camera_bp.set_attribute("fov", str(settings.CAMERA_FOV))
 
-        transform = carla.Transform(
-            carla.Location(x=1.5, z=2.4)
-        )
+        camera_transforms = {
+            "front": carla.Transform(carla.Location(x=1.5, z=2.4)),
+            "side": carla.Transform(
+                carla.Location(y=2.0, z=2.0),
+                carla.Rotation(pitch=-5.0, yaw=90.0),
+            ),
+        }
 
-        camera = world.spawn_actor(
-            camera_bp, transform, attach_to=vehicle
-        )
+        def make_image_callback(camera_frames):
+            def on_image(image):
+                bgra = np.frombuffer(
+                    image.raw_data, dtype=np.uint8
+                ).reshape((image.height, image.width, 4))
+                frame = bgra[:, :, :3].copy()
 
-        def on_image(image):
-            bgra = np.frombuffer(
-                image.raw_data, dtype=np.uint8
-            ).reshape((image.height, image.width, 4))
+                if camera_frames.full():
+                    try:
+                        camera_frames.get_nowait()
+                    except queue.Empty:
+                        pass
 
-            frame = bgra[:, :, :3].copy()
-
-            if frames.full():
                 try:
-                    frames.get_nowait()
-                except queue.Empty:
+                    camera_frames.put_nowait(frame)
+                except queue.Full:
                     pass
 
-            try:
-                frames.put_nowait(frame)
-            except queue.Full:
-                pass
+            return on_image
 
-        camera.listen(on_image)
-        print("YOLO running. Press Q to quit.")
+        for camera_name, transform in camera_transforms.items():
+            camera = world.spawn_actor(camera_bp, transform, attach_to=vehicle)
+            cameras[camera_name] = camera
+            camera.listen(make_image_callback(frames[camera_name]))
+
+        active_camera = "front"
+        print("YOLO running. Press 1 for front, 2 for right-side, or Q to quit.")
         last_detection_log = 0.0
 
         while True:
             try:
-                frame = frames.get(timeout=5)
+                frame = frames[active_camera].get(timeout=5)
             except queue.Empty:
-                print("No camera frames received.")
-                break
+                print(f"No frames received from the {active_camera} camera.")
+                continue
 
             # detect_objects() explicitly converts detect()'s RawDetection
             # values into the DetectedObject interface used by this renderer.
             detections = detector.detect_objects(frame)
             annotated = render_detections(frame, detections)
+            camera_label = (
+                "Front camera (1)"
+                if active_camera == "front"
+                else "Right-side camera (2)"
+            )
+            cv2.putText(
+                annotated,
+                camera_label,
+                (20, annotated.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2,
+            )
 
             now = time.monotonic()
             if now - last_detection_log >= DETECTION_LOG_INTERVAL_SECONDS:
@@ -140,11 +162,16 @@ def main():
 
             cv2.imshow("EdgeForge - Live YOLO Detection", annotated)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("1"):
+                active_camera = "front"
+            elif key == ord("2"):
+                active_camera = "side"
+            elif key == ord("q"):
                 break
 
     finally:
-        if camera is not None:
+        for camera in cameras.values():
             camera.stop()
             camera.destroy()
 

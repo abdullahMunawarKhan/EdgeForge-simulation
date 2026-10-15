@@ -22,7 +22,8 @@ def test_mock_yolo_result_is_converted_and_rendered() -> None:
             )
         ],
     )
-    model = MagicMock(return_value=[result])
+    model = MagicMock()
+    model.predict.return_value = [result]
     detector = ObjectDetector(model_name="mock.pt", model=model)
 
     detections = detector.detect_objects(frame)
@@ -35,11 +36,12 @@ def test_mock_yolo_result_is_converted_and_rendered() -> None:
     assert detections[0].distance is None
     assert detections[0].relative_speed is None
     assert np.any(annotated[5, 4] == (0, 255, 0))
-    model.assert_called_once_with(
-        frame,
+    model.predict.assert_called_once_with(
+        source=frame,
         conf=settings.DETECTION_CONFIDENCE_THRESHOLD,
         iou=settings.YOLO_NMS_IOU,
         device=settings.YOLO_DEVICE,
+        classes=None,
         verbose=False,
     )
 
