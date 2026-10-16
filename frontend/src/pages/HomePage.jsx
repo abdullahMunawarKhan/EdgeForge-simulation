@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDemoState } from '@/hooks/useDemoState.js'
 import { useGuidedDemo } from '@/hooks/useGuidedDemo.js'
+import { useSimulationHistory } from '@/hooks/useSimulationHistory.js'
 import { Navbar, PageShell, SiteFooter, GuidedDemoBar, ModeSelector } from '@/components/layout/index.js'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary.jsx'
 import { HeroSection } from '@/components/hero/HeroSection.jsx'
@@ -36,6 +37,7 @@ const scrollTo = (id) => {
 
 export function HomePage() {
   const demo = useDemoState()
+  const history = useSimulationHistory()
   const [mode, setMode] = useState(readModeFromUrl)
 
   const changeMode = useCallback((nextMode) => {
@@ -119,6 +121,9 @@ export function HomePage() {
               />
               <FailureAnalysis
                 failures={demo.dataset.failures}
+                historyData={history.data}
+                historyState={history.state}
+                historyError={history.error}
                 selectedFailureId={demo.selectedFailureId}
                 onSelectFailure={demo.onSelectFailureId}
                 onReplay={(f) => {
@@ -133,6 +138,9 @@ export function HomePage() {
               <CoverageExplorer
                 runs={demo.dataset.runs}
                 failures={demo.dataset.failures}
+                historyData={history.data}
+                historyState={history.state}
+                historyError={history.error}
                 onApplyScenario={(cfg) => {
                   demo.onScenarioChange(cfg)
                   scrollTo('scenario')
@@ -149,6 +157,11 @@ export function HomePage() {
                 selectedFailureId={demo.selectedFailureId}
                 currentScenario={demo.currentScenario}
                 onRunNextScenario={handleRunNext}
+                historyData={history.data}
+                serverRecommendations={history.recommendations}
+                historyState={history.state}
+                historyError={history.error}
+                onExecuteRecommendation={history.executeRecommendation}
               />
               <BenefitsSection />
             </>

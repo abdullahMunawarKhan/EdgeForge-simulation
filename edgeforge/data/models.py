@@ -12,8 +12,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Literal, Optional
+from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,9 @@ class RiskAssessment(BaseModel):
 class PerceptionFailureRecord(BaseModel):
     """Structured validation failure associated with a prediction or actor."""
 
+    failure_id: str = Field(default_factory=lambda: f"failure_{uuid4().hex}")
+    fingerprint: str = ""
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     failure_type: Literal[
         "missed_detection",
         "false_positive",
@@ -119,6 +125,12 @@ class PerceptionFailureRecord(BaseModel):
     scenario_id: Optional[str] = None
     actor_id: Optional[int] = None
     message: str = ""
+
+    @model_validator(mode="after")
+    def set_fingerprint(self) -> PerceptionFailureRecord:
+        if not self.fingerprint:
+            self.fingerprint = compute_failure_signature(self)
+        return self
 
 
 class HistoricalRunRecord(BaseModel):

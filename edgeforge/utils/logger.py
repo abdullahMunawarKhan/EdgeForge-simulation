@@ -35,6 +35,13 @@ def _configure_defaults() -> None:
     # Remove the default handler so we can install our own with consistent formatting.
     _loguru_logger.remove()
 
+    # Ensure stdout supports UTF-8 on Windows consoles to avoid charmap UnicodeEncodeErrors
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     _loguru_logger.add(
         sys.stdout,
         colorize=True,

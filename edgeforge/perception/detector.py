@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -74,6 +74,42 @@ class RawDetection:
             "confidence": self.confidence,
             "class_id": self.class_id,
         }
+
+
+def adapt_ground_truth_detections(
+    detections: Sequence[DetectedObject],
+    source_size: Tuple[int, int],
+    target_size: Tuple[int, int],
+) -> List[RawDetection]:
+    """Adapt mock ground-truth boxes to the resized frame's detector format."""
+    source_width, source_height = source_size
+    target_width, target_height = target_size
+    if min(source_width, source_height, target_width, target_height) <= 0:
+        raise ValueError("Source and target image dimensions must be positive.")
+
+    scale_x = target_width / source_width
+    scale_y = target_height / source_height
+    raw_detections: List[RawDetection] = []
+    for detection in detections:
+        if detection.bbox is None or len(detection.bbox) != 4:
+            raise ValueError(
+                f"Mock ground-truth detection {detection.object_id!r} "
+                "must have a four-coordinate bounding box."
+            )
+        x1, y1, x2, y2 = detection.bbox
+        raw_detections.append(
+            RawDetection(
+                bbox=[
+                    x1 * scale_x,
+                    y1 * scale_y,
+                    x2 * scale_x,
+                    y2 * scale_y,
+                ],
+                object_type=detection.object_type,
+                confidence=detection.confidence,
+            )
+        )
+    return raw_detections
 
 
 class ObjectDetector:

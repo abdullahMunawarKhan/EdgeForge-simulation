@@ -125,6 +125,7 @@ class SensorManager:
     def __init__(self, client: "CarlaClient") -> None:  # type: ignore[name-defined]
         self._client = client
         self._sensors: List[carla.Actor] = []
+        self.rgb_cameras: Dict[str, Any] = {}
 
         self.latest_rgb: Optional[np.ndarray] = None
         self.latest_rgb_frame: int = -1
@@ -206,6 +207,7 @@ class SensorManager:
             sensor = self._client.world.spawn_actor(bp, transform, attach_to=vehicle)
             self._client.register_actor(sensor)
             self._sensors.append(sensor)
+            self.rgb_cameras[camera_name] = sensor
 
             def on_image(image: carla.Image, name: str = camera_name) -> None:
                 frame = image_to_bgr(image)
@@ -309,3 +311,4 @@ class SensorManager:
                 except Exception:
                     logger.exception("Could not stop a CARLA sensor during cleanup.")
         self._sensors.clear()
+        self.rgb_cameras.clear()

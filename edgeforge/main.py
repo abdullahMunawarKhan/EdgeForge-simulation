@@ -51,7 +51,12 @@ import numpy as np
 from edgeforge.analysis import RiskEngine
 from edgeforge.config import settings
 from edgeforge.data.models import DetectedObject, RiskLevel, VehicleState
-from edgeforge.perception import CameraProcessor, ObjectDetector, PerceptionPipeline
+from edgeforge.perception import (
+    CameraProcessor,
+    ObjectDetector,
+    PerceptionPipeline,
+    adapt_ground_truth_detections,
+)
 from edgeforge.utils import get_logger
 
 logger = get_logger(__name__)
@@ -307,9 +312,7 @@ def run_simulation(
     )
     risk_engine = RiskEngine()
 
-    # Instantiate the runner directly (keeps access to backend-specific
-    # helpers like latest_mock_ground_truth_detections that run_config
-    # wouldn't expose to a plain on_frame callback).
+    # Instantiate the runner directly to access mock ground truth.
     runner = ScenarioRunner.from_config(scenario_path, backend=backend)
     api_server = start_api_server()
     scenario_info = getattr(runner, "info", None)
@@ -330,12 +333,6 @@ def run_simulation(
     window_open = not headless
     last_risk = None
     last_detections: List[DetectedObject] = []
-    # ---------------------------------------------------------------------
-    # When running MOCK backend, use synthetic ground truth if configured
-    # YOLO does not detect the visually rendered NPCs in the mock frame.
-    # ---------------------------------------------------------------------
-    USE_MOCK_GROUND_TRUTH_AS_DETECTOR = runner.backend == "mock"
-
     def on_frame(frame: SensorFrame) -> None:
         nonlocal window_open, last_risk, last_detections
 
@@ -351,32 +348,23 @@ def run_simulation(
                 )
             camera_frame = rgb
             # --- B) Run perception detections --------------------------------
-            real_dets = perception_pipeline.process_frame(
-                rgb,
-                timestamp=frame.timestamp,
-            )
-            pipeline_detections = real_dets
-            if USE_MOCK_GROUND_TRUTH_AS_DETECTOR and not real_dets:
-                # Scale ground-truth bboxes from the *mock-sensor resolution* up
-                # to the *post-resize resolution* used by the HUD.
-                gt_raw = runner.latest_mock_ground_truth_detections
-                if gt_raw and (info.width != settings.CAMERA_WIDTH or info.height != settings.CAMERA_HEIGHT):
-                    sx = settings.CAMERA_WIDTH / max(1, info.width)
-                    sy = settings.CAMERA_HEIGHT / max(1, info.height)
-                    scaled: List[DetectedObject] = []
-                    for d in gt_raw:
-                        if d.bbox and len(d.bbox) == 4:
-                            x1, y1, x2, y2 = d.bbox
-                            d2 = DetectedObject.model_validate(d.model_dump())
-                            d2.bbox = [x1 * sx, y1 * sy, x2 * sx, y2 * sy]
-                            scaled.append(d2)
-                        else:
-                            scaled.append(d)
-                    last_detections = scaled
-                else:
-                    last_detections = gt_raw
+            if runner.backend == "mock":
+                mock_detections = adapt_ground_truth_detections(
+                    runner.latest_mock_ground_truth_detections,
+                    source_size=(info.width, info.height),
+                    target_size=(rgb.shape[1], rgb.shape[0]),
+                )
+                last_detections = perception_pipeline.process_frame(
+                    rgb,
+                    timestamp=frame.timestamp,
+                    raw_detections=mock_detections,
+                )
             else:
-                last_detections = real_dets
+                last_detections = perception_pipeline.process_frame(
+                    rgb,
+                    timestamp=frame.timestamp,
+                )
+            pipeline_detections = last_detections
         else:
             last_detections = []
 
@@ -393,17 +381,20 @@ def run_simulation(
                 )
 
         pipeline_status = perception_pipeline.get_status()
+        resolved_detections = (
+            last_detections if runner.backend == "mock" else pipeline_detections
+        )
         runtime.publish_frame(
             backend=runner.backend,
             frame_id=frame.frame_number,
             timestamp=frame.timestamp,
-            detections=pipeline_detections,
+            detections=resolved_detections,
             scenario_conditions=scenario_conditions,
             metrics={
                 "frames_processed": pipeline_status["frames_processed"],
                 "detection_count": (
-                    len(pipeline_detections)
-                    if pipeline_detections is not None
+                    len(resolved_detections)
+                    if resolved_detections is not None
                     else None
                 ),
                 "pipeline": pipeline_status,

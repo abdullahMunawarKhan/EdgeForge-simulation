@@ -24,6 +24,7 @@ from edgeforge.data.history import RunHistoryStore
 from edgeforge.data.models import DetectedObject, PerceptionFailureRecord
 from edgeforge.perception.validation import (
     FailureSeverityRules,
+    GroundTruthObject,
     RunValidationMetrics,
     ValidationMetrics,
     aggregate_run_metrics,
@@ -321,6 +322,15 @@ class ScenarioExecutionManager:
             "map": cfg.get("map", "Town01"),
             "weather": fine if fine else {"preset": cfg.get("weather", "ClearNoon")},
             "traffic": cfg.get("traffic", {}),
+            "actor_configuration": cfg.get("actor_configuration", {}),
+            "ego_vehicle": cfg.get("ego_vehicle", {}),
+            "sensors": cfg.get("sensors", {}),
+            "generated_metadata": cfg.get("generated_metadata", {}),
+            "parameters": {
+                "duration_seconds": cfg.get("duration_seconds"),
+                "fixed_delta_seconds": cfg.get("fixed_delta_seconds", 0.05),
+                "iou_threshold": iou_threshold,
+            },
         }
 
         try:
@@ -331,7 +341,9 @@ class ScenarioExecutionManager:
                     sim_elapsed_s = sf.timestamp
 
                     # Gather ground truth objects
-                    gt_objs: list[DetectedObject] = runner.latest_mock_ground_truth_detections
+                    gt_objs: list[DetectedObject | GroundTruthObject] = (
+                        runner.latest_ground_truth_objects
+                    )
 
                     # Produce or evaluate predictions
                     predictions: list[DetectedObject] = []
@@ -370,7 +382,15 @@ class ScenarioExecutionManager:
                 scenario_id=scenario_id,
                 run_id=run_id,
                 scenario_conditions=scenario_conditions,
-                parameters={"candidate_id": candidate_id, "backend": resolved_backend},
+                # Preserve the normalized config so the run can be reproduced from history.
+                parameters={
+                    "candidate_id": candidate_id,
+                    "backend": resolved_backend,
+                    "duration_seconds": cfg.get("duration_seconds"),
+                    "fixed_delta_seconds": cfg.get("fixed_delta_seconds", 0.05),
+                    "iou_threshold": iou_threshold,
+                    "scenario_config": cfg,
+                },
                 iou_threshold=iou_threshold,
             )
 

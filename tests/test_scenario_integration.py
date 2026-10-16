@@ -12,12 +12,15 @@ Verifies:
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from edgeforge.data.history import RunHistoryStore
+from edgeforge.perception.validation import GroundTruthObject
 from edgeforge.scenarios.executor import (
     ExecutionResult,
     ExecutionStatus,
@@ -38,6 +41,51 @@ from edgeforge.simulation.scenario_runner import BACKEND_CARLA, BACKEND_MOCK, Sc
 # ---------------------------------------------------------------------------
 class TestScenarioCompatibility:
     """Verify generated scenario configurations parse cleanly in ScenarioRunner."""
+
+    def test_carla_ground_truth_uses_front_camera_and_scenario_actors(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ego = SimpleNamespace(id=1)
+        vehicle = SimpleNamespace(id=2)
+        pedestrian = SimpleNamespace(id=3)
+        camera_transform = object()
+        camera = SimpleNamespace(get_transform=lambda: camera_transform)
+        runner = ScenarioRunner.__new__(ScenarioRunner)
+        runner._backend = BACKEND_CARLA
+        runner._cfg = {
+            "sensors": {"rgb_camera": {"width": 640, "height": 360, "fov": 100}}
+        }
+        runner._ego_bundle = SimpleNamespace(vehicle=ego)
+        runner._traffic_bundle = SimpleNamespace(
+            vehicles=[vehicle],
+            pedestrians=[pedestrian],
+            bicycles=[],
+        )
+        runner._sensor_mgr = SimpleNamespace(rgb_cameras={"front": camera})
+        captured: dict[str, Any] = {}
+        expected = [GroundTruthObject(2, "car", (1, 2, 3, 4))]
+
+        def extract_ground_truth(*args: Any, **kwargs: Any) -> list[GroundTruthObject]:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return expected
+
+        monkeypatch.setattr(
+            "edgeforge.simulation.scenario_runner.extract_carla_ground_truth",
+            extract_ground_truth,
+        )
+
+        assert runner.latest_ground_truth_objects == expected
+        assert captured["args"] == (
+            [vehicle, pedestrian],
+            ego,
+            camera_transform,
+            640,
+            360,
+            100.0,
+        )
+        assert captured["kwargs"] == {"actor_ids": {2, 3}}
 
     def test_generated_candidate_to_runner_config_parsed_by_scenario_runner(self) -> None:
         """ScenarioCandidate produces a config that ScenarioRunner initializes without error."""
@@ -258,6 +306,127 @@ class TestSafeScenarioExecution:
         assert record.scenario_id == "scenario_exec_001"
         assert record.parameters.get("candidate_id") == "cand_exec_001"
         assert record.frames_processed == 10
+
+    def test_mock_yolo_ground_truth_failures_are_fingerprinted_and_persisted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store = RunHistoryStore(tmp_path / "failure_history")
+        config = {
+            "name": "scenario_failure_pipeline",
+            "map": "Town02",
+            "weather": "ClearNoon",
+            "fine_weather": {
+                "fog_density": 42.0,
+                "precipitation": 20.0,
+                "sun_altitude_angle": 10.0,
+            },
+            "traffic": {"vehicles": 2, "pedestrians": 0, "bicycles": 0},
+            "ego_vehicle": {"spawn_point_index": 2},
+            "sensors": {
+                "rgb_camera": {"enabled": True, "width": 320, "height": 240}
+            },
+            "duration_seconds": 2.0,
+            "fixed_delta_seconds": 0.05,
+            "generated_metadata": {"candidate_id": "candidate-failure-test", "seed": 27},
+        }
+        ground_truth = [
+            GroundTruthObject(101, "car", (0, 0, 10, 10)),
+            GroundTruthObject(102, "car", (20, 0, 30, 10)),
+            GroundTruthObject(103, "pedestrian", (40, 0, 50, 10)),
+            GroundTruthObject(104, "truck", (60, 0, 70, 10)),
+        ]
+        predictions = [
+            {"bbox": [24, 0, 34, 10], "object_type": "car", "confidence": 0.9},
+            {"bbox": [40, 0, 50, 10], "object_type": "pedestrian", "confidence": 0.2},
+            {"bbox": [80, 0, 90, 10], "object_type": "truck", "confidence": 0.9},
+        ]
+
+        class MockYolo:
+            def detect(self, _rgb: Any) -> list[dict[str, Any]]:
+                return predictions
+
+        class MockRunner:
+            latest_ground_truth_objects = ground_truth
+
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+            @contextmanager
+            def run(self):
+                yield [SimpleNamespace(frame_number=7, timestamp=0.35, rgb=b"mock-frame")]
+
+        monkeypatch.setattr("edgeforge.scenarios.executor.ScenarioRunner", MockRunner)
+        manager = ScenarioExecutionManager(history_store=store, default_backend=BACKEND_MOCK)
+
+        first = manager.execute(config, detector=MockYolo())
+        second = manager.execute(config, detector=MockYolo())
+
+        assert first.status == second.status == ExecutionStatus.COMPLETED
+        assert first.metrics is not None
+        assert {failure.failure_type for failure in first.metrics.failures} == {
+            "missed_detection",
+            "false_positive",
+            "poor_localization",
+            "low_confidence",
+        }
+        assert {
+            failure.failure_type: failure.severity
+            for failure in first.metrics.failures
+        } == {
+            "missed_detection": "high",
+            "false_positive": "medium",
+            "poor_localization": "high",
+            "low_confidence": "medium",
+        }
+        assert first.metrics.failures[0].scenario_conditions["weather"] == config["fine_weather"]
+
+        fingerprints_by_run = []
+        for result in (first, second):
+            run = store.get_run(result.run_id)
+            assert run.parameters["scenario_config"] == config
+            assert run.scenario_conditions["traffic"] == config["traffic"]
+            assert run.scenario_conditions["ego_vehicle"] == config["ego_vehicle"]
+            assert run.scenario_conditions["sensors"] == config["sensors"]
+            assert run.scenario_conditions["parameters"] == {
+                "duration_seconds": config["duration_seconds"],
+                "fixed_delta_seconds": config["fixed_delta_seconds"],
+                "iou_threshold": 0.5,
+            }
+
+            failures = store.get_run_failures(result.run_id)
+            assert len(failures) == 5
+            assert all(failure.failure_id for failure in failures)
+            assert all(failure.fingerprint for failure in failures)
+            assert all(failure.timestamp.tzinfo is not None for failure in failures)
+            assert all(failure.scenario_conditions["map"] == "Town02" for failure in failures)
+            assert len({failure.failure_id for failure in failures}) == len(failures)
+            fingerprints_by_run.append({failure.fingerprint for failure in failures})
+
+        assert fingerprints_by_run[0] == fingerprints_by_run[1]
+
+        filtered = store.get_failures(
+            scenario_id="scenario_failure_pipeline",
+            failure_type="low_confidence",
+        )
+        assert len(filtered) == 2
+        assert all(failure.object_class == "pedestrian" for failure in filtered)
+
+        coverage = store.get_coverage_summary()
+        assert coverage["total_runs"] == 2
+        assert coverage["total_failures"] == 10
+        assert coverage["failures_by_type"] == {
+            "missed_detection": 4,
+            "false_positive": 2,
+            "poor_localization": 2,
+            "low_confidence": 2,
+        }
+        assert coverage["condition_coverage"]["weather.fog_density"] == {
+            "min": 42.0,
+            "max": 42.0,
+            "distinct_count": 1,
+        }
 
     def test_failed_execution_not_marked_successful_or_persisted(self, tmp_path: Path, monkeypatch: Any) -> None:
         """When an execution crashes, it is marked FAILED, not completed, and NOT saved to history."""

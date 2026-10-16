@@ -19,6 +19,9 @@ import {
  * @property {import('@/types').CoverageItem[]} [coverageItems]
  * @property {import('@/types').DemoRunResult[]} [runs]
  * @property {import('@/types').FailureRecord[]} [failures]
+ * @property {Object|null} [historyData]
+ * @property {'demo'|'loading'|'available'|'error'} [historyState]
+ * @property {string|null} [historyError]
  * @property {(cfg: Partial<import('@/types').ScenarioConfig>) => void} [onApplyScenario]
  * @property {(tab: string) => void} [onNavigate]
  */
@@ -29,6 +32,9 @@ export function CoverageExplorer({
   description = 'Projector view of multi-dimensional validation coverage: where EDGEFORGE has looked, where failures accumulate, and which combinations remain under-tested or fully untested.',
   runs = [],
   failures = [],
+  historyData = null,
+  historyState = 'demo',
+  historyError = null,
   onApplyScenario,
   onNavigate,
 }) {
@@ -60,6 +66,81 @@ export function CoverageExplorer({
   }
 
   const { summary, hotZones = [], coverageGaps = [] } = matrixData
+
+  if (historyState !== 'demo') {
+    const coverage = historyData?.coverage ?? {}
+    const conditionCoverage = coverage.condition_coverage ?? {}
+    return (
+      <PageSection id="coverage">
+        <div className="mb-6">
+          <div className="chip chip-warning">{eyebrow}</div>
+          <h2 className="mt-2 text-2xl font-bold tracking-tight md:text-3xl">
+            Persisted Run Coverage
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm text-text-muted">
+            Coverage calculated from runs stored by the configured EdgeForge history API.
+            Dimensions are shown only when they were recorded in scenario metadata.
+          </p>
+        </div>
+        {historyState === 'loading' ? (
+          <p className="text-sm text-text-muted">Loading persisted run coverage…</p>
+        ) : historyState === 'error' ? (
+          <p className="rounded-lg border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
+            Could not load persisted run coverage: {historyError}
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-border-subtle bg-surface/80 px-4 py-3">
+                <div className="text-[11px] text-text-subtle">Persisted runs</div>
+                <div className="mt-1 font-mono text-xl font-bold text-text">
+                  {coverage.total_runs ?? 0}
+                </div>
+              </div>
+              <div className="rounded-lg border border-border-subtle bg-surface/80 px-4 py-3">
+                <div className="text-[11px] text-text-subtle">Persisted failures</div>
+                <div className="mt-1 font-mono text-xl font-bold text-text">
+                  {coverage.total_failures ?? 0}
+                </div>
+              </div>
+              <div className="rounded-lg border border-border-subtle bg-surface/80 px-4 py-3">
+                <div className="text-[11px] text-text-subtle">Recorded domain coverage</div>
+                <div className="mt-1 font-mono text-xl font-bold text-text">
+                  {Number.isFinite(coverage.overall_coverage_ratio)
+                    ? `${(coverage.overall_coverage_ratio * 100).toFixed(1)}%`
+                    : 'Unavailable'}
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 rounded-lg border border-border-subtle bg-surface/70 p-4">
+              <h3 className="text-sm font-semibold text-text">Recorded scenario conditions</h3>
+              {Object.keys(conditionCoverage).length === 0 ? (
+                <p className="mt-2 text-xs text-text-muted">
+                  No numeric scenario-condition ranges have been recorded.
+                </p>
+              ) : (
+                <dl className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {Object.entries(conditionCoverage).map(([name, values]) => (
+                    <div key={name} className="rounded border border-border-subtle p-3">
+                      <dt className="text-xs font-medium text-text">{name}</dt>
+                      <dd className="mt-1 text-[11px] text-text-muted">
+                        {`min ${values.min} · max ${values.max} · ${values.distinct_count} distinct`}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+            <div className="mt-4 text-xs text-text-muted">
+              {Array.isArray(coverage.tested_scenarios) && coverage.tested_scenarios.length > 0
+                ? `Scenarios: ${coverage.tested_scenarios.join(', ')}`
+                : 'No scenarios are recorded yet.'}
+            </div>
+          </>
+        )}
+      </PageSection>
+    )
+  }
 
   if (runs.length === 0) {
     return (

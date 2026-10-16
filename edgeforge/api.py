@@ -11,18 +11,24 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic, sleep
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 import cv2
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from pydantic import BaseModel, Field
+
 from edgeforge.config.settings import PROJECT_ROOT, settings
+from edgeforge.data.history import RunHistoryStore
 from edgeforge.data.models import DetectedObject, PerceptionFailureRecord, RiskAssessment
 from edgeforge.perception.yolo_camera_test import render_detections
+from edgeforge.scenarios.executor import ScenarioExecutionManager, ExecutionStatus
+from edgeforge.scenarios.generator import ScenarioGenerator
+from edgeforge.simulation.runner_service import SimulationService
 from edgeforge.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,6 +40,7 @@ _DEFAULT_SNAPSHOT: dict[str, Any] = {
     "simulation_status": "disconnected",
     "backend": None,
     "scenario_id": None,
+    "run_id": None,
     "frame_id": None,
     "timestamp": None,
     "detections": None,
@@ -109,6 +116,7 @@ class SimulationRuntime:
             simulation_status="starting",
             backend=backend,
             scenario_id=scenario_conditions.get("scenario_id"),
+            run_id=scenario_conditions.get("run_id"),
             scenario_conditions=dict(scenario_conditions),
             failures=None,
         )
@@ -132,6 +140,7 @@ class SimulationRuntime:
             "simulation_status": "running",
             "backend": backend,
             "scenario_id": scenario_conditions.get("scenario_id"),
+            "run_id": scenario_conditions.get("run_id"),
             "frame_id": frame_id,
             "timestamp": timestamp,
             "detections": (
@@ -354,6 +363,8 @@ class SimulationRuntime:
 
 
 runtime = SimulationRuntime()
+history_store = RunHistoryStore()
+simulation_service = SimulationService(runtime, history_store)
 app = FastAPI(title="EdgeForge Simulation API", version=settings.VERSION)
 
 _configured_origins = [
@@ -366,10 +377,15 @@ app.add_middleware(
     allow_origins=_configured_origins or [
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://localhost:5175",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
-    allow_methods=["GET"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -379,16 +395,183 @@ if not _run_dir.is_absolute():
 LATEST_REPORT_PATH = _run_dir / "phase4-live-validation.json"
 
 
+class SimulationStartPayload(BaseModel):
+    backend: str = "mock"
+    scenario: Optional[dict[str, Any]] = None
+    scenario_path: Optional[str] = None
+
+
+class RecommendedScenarioExecutionPayload(BaseModel):
+    candidate_id: str
+    scenario_config: dict[str, Any]
+    backend: Literal["mock"] = "mock"
+    max_frames: int = Field(default=20, ge=1, le=300)
+
+
 @app.get("/api/v1/simulation/status")
 def get_simulation_status() -> dict[str, Any]:
     """Return the latest simulation/pipeline connection status."""
-    return runtime.status()
+    st = runtime.status()
+    st["is_running"] = simulation_service.is_running or st.get("status") == "running"
+    return st
+
+
+@app.post("/api/v1/simulation/start")
+def start_simulation(payload: Optional[SimulationStartPayload] = None) -> dict[str, Any]:
+    """Start a background simulation (defaulting to mock backend)."""
+    backend = payload.backend if payload else "mock"
+    scenario_cfg = payload.scenario if payload else None
+    scenario_path = payload.scenario_path if payload else None
+    return simulation_service.start(
+        backend=backend,
+        scenario_config=scenario_cfg,
+        scenario_path=scenario_path,
+    )
+
+
+@app.post("/api/v1/simulation/stop")
+def stop_simulation() -> dict[str, Any]:
+    """Stop the active simulation."""
+    return simulation_service.stop()
+
+
+@app.get("/api/v1/simulation/configuration")
+def get_simulation_configuration() -> dict[str, Any]:
+    """Return active or pending scenario configuration."""
+    return {
+        "status": "success",
+        "configuration": simulation_service.get_configuration(),
+    }
+
+
+@app.put("/api/v1/simulation/configuration")
+@app.post("/api/v1/simulation/configuration")
+def update_simulation_configuration(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Update active or pending scenario configuration."""
+    return simulation_service.update_configuration(payload)
 
 
 @app.get("/api/v1/simulation/snapshot")
 def get_simulation_snapshot() -> dict[str, Any]:
     """Return the latest real pipeline snapshot, or explicit unavailable values."""
     return runtime.snapshot()[1]
+
+
+@app.get("/api/v1/simulation/history")
+def get_simulation_history(
+    scenario_id: str | None = None,
+    run_id: str | None = None,
+    failure_type: str | None = None,
+    min_severity: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return persisted runs, failures, and coverage with optional filters."""
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 1000.")
+    if min_severity is not None and min_severity.lower() not in {
+        "low",
+        "medium",
+        "high",
+        "critical",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="min_severity must be low, medium, high, or critical.",
+        )
+
+    runs = history_store.list_runs(scenario_id=scenario_id)
+    if run_id is not None:
+        runs = [run for run in runs if run.run_id == run_id]
+    runs = runs[:limit]
+    failures = history_store.get_failures(
+        scenario_id=scenario_id,
+        run_id=run_id,
+        failure_type=failure_type,
+        min_severity=min_severity,
+    )
+    return {
+        "runs": [run.model_dump(mode="json") for run in runs],
+        "failures": [failure.model_dump(mode="json") for failure in failures],
+        "coverage": history_store.get_coverage_summary(),
+    }
+
+
+@app.get("/api/v1/scenarios/recommendations")
+def get_scenario_recommendations(
+    count: int = Query(default=5, ge=1, le=20),
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Rank reproducible next scenarios from persisted failures and coverage."""
+    generator = ScenarioGenerator(history_store=history_store, seed=seed)
+    recommendations = generator.generate_and_rank(
+        num_candidates=count,
+        seed=seed,
+        allow_duplicates=False,
+    )
+    return {
+        "cold_start": recommendations[0].cold_start if recommendations else not bool(history_store.list_runs()),
+        "recommendations": [
+            recommendation.model_dump(mode="json")
+            for recommendation in recommendations
+        ],
+    }
+
+
+@app.post("/api/v1/scenarios/execute")
+def execute_recommended_scenario(
+    payload: RecommendedScenarioExecutionPayload,
+) -> dict[str, Any]:
+    """Execute a selected recommendation using the mock scenario runner."""
+    scenario_config = dict(payload.scenario_config)
+    if scenario_config.get("candidate_id") != payload.candidate_id:
+        raise HTTPException(
+            status_code=422,
+            detail="candidate_id must match the recommended scenario configuration.",
+        )
+    manager = ScenarioExecutionManager(
+        history_store=history_store,
+        default_backend="mock",
+    )
+    result = manager.execute(
+        scenario_config,
+        backend="mock",
+        max_frames=payload.max_frames,
+    )
+    response: dict[str, Any] = {
+        "candidate_id": result.candidate_id,
+        "scenario_id": result.scenario_id,
+        "run_id": result.run_id,
+        "status": result.status.value,
+        "backend": result.backend,
+        "persisted": result.persisted,
+        "scenario_config": result.scenario_config,
+        "sim_frames": result.sim_frames,
+        "sim_time_s": result.sim_time_s,
+        "error_message": result.error_message,
+    }
+    if result.metrics is not None:
+        response["metrics"] = result.metrics.to_dict()
+        response["failures"] = [
+            failure.model_dump(mode="json")
+            for failure in result.metrics.failures
+        ]
+        if result.persisted:
+            response["run"] = history_store.get_run(result.run_id).model_dump(
+                mode="json"
+            )
+    if result.status == ExecutionStatus.FAILED:
+        raise HTTPException(
+            status_code=500,
+            detail=response,
+        )
+    if result.status == ExecutionStatus.REJECTED:
+        raise HTTPException(
+            status_code=422,
+            detail=response,
+        )
+    return response
 
 
 @app.get("/api/v1/simulation/camera/status")

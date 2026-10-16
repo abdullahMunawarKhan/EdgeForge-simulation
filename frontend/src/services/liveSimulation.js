@@ -3,6 +3,11 @@ const API_PATHS = {
   snapshot: 'api/v1/simulation/snapshot',
   report: 'api/v1/simulation/reports/latest',
   configuration: 'api/v1/simulation/configuration',
+  history: 'api/v1/simulation/history',
+  recommendations: 'api/v1/scenarios/recommendations',
+  executeRecommendation: 'api/v1/scenarios/execute',
+  start: 'api/v1/simulation/start',
+  stop: 'api/v1/simulation/stop',
   websocket: 'api/v1/simulation/ws',
 }
 
@@ -78,6 +83,72 @@ export function createLiveSimulationClient(baseUrl, fetchImpl = globalThis.fetch
       return requestJson(
         fetchImpl,
         buildBackendUrl(baseUrl, API_PATHS.report),
+        { signal },
+      )
+    },
+
+    getHistory(signal) {
+      return requestJson(
+        fetchImpl,
+        buildBackendUrl(baseUrl, API_PATHS.history),
+        { signal },
+      )
+    },
+
+    getRecommendations(signal, { count = 5, seed = 42 } = {}) {
+      const url = new URL(buildBackendUrl(baseUrl, API_PATHS.recommendations))
+      url.searchParams.set('count', String(count))
+      url.searchParams.set('seed', String(seed))
+      return requestJson(fetchImpl, url.toString(), { signal })
+    },
+
+    executeRecommendation(recommendation, signal, { maxFrames = 20 } = {}) {
+      return requestJson(
+        fetchImpl,
+        buildBackendUrl(baseUrl, API_PATHS.executeRecommendation),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            candidate_id: recommendation.candidate_id,
+            scenario_config: recommendation.scenario_config,
+            backend: 'mock',
+            max_frames: maxFrames,
+          }),
+          signal,
+        },
+      )
+    },
+
+    startSimulation(options = {}, signal) {
+      return requestJson(
+        fetchImpl,
+        buildBackendUrl(baseUrl, API_PATHS.start),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options),
+          signal,
+        },
+      )
+    },
+
+    stopSimulation(signal) {
+      return requestJson(
+        fetchImpl,
+        buildBackendUrl(baseUrl, API_PATHS.stop),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal,
+        },
+      )
+    },
+
+    getConfiguration(signal) {
+      return requestJson(
+        fetchImpl,
+        buildBackendUrl(baseUrl, API_PATHS.configuration),
         { signal },
       )
     },

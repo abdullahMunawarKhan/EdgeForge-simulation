@@ -190,6 +190,11 @@ class ScenarioCandidate(BaseModel):
                 "pedestrians": self.actor_config.traffic_pedestrians,
                 "bicycles": self.actor_config.traffic_bicycles,
             },
+            "actor_configuration": {
+                "target_count": self.actor_config.target_count,
+                "ego_spawn_index": self.actor_config.ego_spawn_index,
+                "target_types": list(self.actor_config.target_types),
+            },
             "ego_vehicle": {
                 "model": "vehicle.tesla.model3",
                 "spawn_point_index": self.actor_config.ego_spawn_index,
@@ -198,7 +203,7 @@ class ScenarioCandidate(BaseModel):
             },
             "sensors": {
                 "rgb_camera": {
-                    "enabled": true if hasattr(bool, "true") else True,
+                    "enabled": True,
                     "width": settings.CAMERA_WIDTH,
                     "height": settings.CAMERA_HEIGHT,
                     "fov": settings.CAMERA_FOV,
@@ -244,7 +249,11 @@ class ScenarioGenerator:
         domain_bounds: Mapping[str, tuple[float, float]] | None = None,
         seed: int | None = None,
     ) -> None:
-        self.store = history_store or get_history_store(history_dir)
+        self.store = (
+            history_store
+            if history_store is not None
+            else get_history_store(history_dir)
+        )
         self.domain_bounds = dict(domain_bounds or DEFAULT_DOMAIN_BOUNDS)
         self.rng = random.Random(seed)
 
