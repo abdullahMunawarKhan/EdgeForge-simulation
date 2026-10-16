@@ -4,10 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-try:
-    import carla
-except ImportError:
-    carla = None
+import carla
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -63,12 +60,6 @@ def main() -> None:
         help="vehicle actor ID to preserve (defaults to the lowest-ID vehicle)",
     )
     args = parser.parse_args()
-
-    if carla is None:
-        raise RuntimeError(
-            "The CARLA Python API is required to connect to CARLA. "
-            "Install carla or run inside an environment with the CARLA client library."
-        )
 
     client = carla.Client(settings.CARLA_HOST, settings.CARLA_PORT)
     client.set_timeout(15.0)

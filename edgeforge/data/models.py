@@ -2,7 +2,7 @@
 Typed data models shared across EdgeForge modules.
 
 These Pydantic models define the "contracts" between the simulation,
-perception, and analysis layers.  Keeping them in one place makes it
+perception, and analysis layers. Keeping them in one place makes it
 easy to add fields later (e.g. LiDAR point-cloud metadata, heading,
 lane information, …) without touching the pipeline code.
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -63,8 +63,8 @@ class DetectedObject(BaseModel):
     object_id: str = Field(default_factory=lambda: f"obj_{id(object).__str__()}")
     object_type: str = "unknown"  # e.g. "car", "pedestrian", "bicycle", ...
     confidence: float = 0.0  # 0..1
-    distance: float = 0.0  # meters from ego vehicle
-    relative_speed: float = 0.0  # m/s, positive = object moving away
+    distance: Optional[float] = None  # meters from ego vehicle, when estimated
+    relative_speed: Optional[float] = None  # m/s, when estimated
     bbox: Optional[List[float]] = None  # [x1, y1, x2, y2] in pixel coords
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
@@ -93,3 +93,158 @@ class RiskAssessment(BaseModel):
     @classmethod
     def _clamp_score(cls, v: float) -> float:
         return max(0.0, min(1.0, v))
+
+
+class PerceptionFailureRecord(BaseModel):
+    """Structured validation failure associated with a prediction or actor."""
+
+    failure_type: Literal[
+        "missed_detection",
+        "false_positive",
+        "poor_localization",
+        "low_confidence",
+        "confidence_degradation",
+        "invalid_box",
+    ]
+    scenario_conditions: dict[str, Any] = Field(default_factory=dict)
+    object_class: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    baseline_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    predicted_bbox: Optional[List[float]] = None
+    ground_truth_bbox: Optional[List[float]] = None
+    iou: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    severity: Literal["low", "medium", "high", "critical"]
+    frame_id: Optional[int] = None
+    scenario_id: Optional[str] = None
+    actor_id: Optional[int] = None
+    message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Scenario events
+# ---------------------------------------------------------------------------
+
+EVENT_COLLISION = "collision"
+EVENT_LANE_INVASION = "lane_invasion"
+EVENT_NEAR_COLLISION = "near_collision"
+EVENT_INFO = "info"
+
+VALID_EVENT_TYPES = (
+    EVENT_COLLISION,
+    EVENT_LANE_INVASION,
+    EVENT_NEAR_COLLISION,
+    EVENT_INFO,
+)
+
+VALID_SEVERITIES = ("info", "warning", "critical")
+
+
+class ScenarioEvent(BaseModel):
+    """A structured event that occurs during a scenario run."""
+
+    type: str
+    severity: str
+    timestamp: float
+    message: str = ""
+
+    @field_validator("type")
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
+        if v not in VALID_EVENT_TYPES:
+            raise ValueError(f"Unknown event type: {v}")
+        return v
+
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        if v not in VALID_SEVERITIES:
+            raise ValueError(f"Unknown severity: {v}")
+        return v
+
+    @field_validator("timestamp")
+    @classmethod
+    def _validate_timestamp(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("timestamp must be non-negative")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Lane information
+# ---------------------------------------------------------------------------
+
+class LaneInfo(BaseModel):
+    """Information about the ego vehicle's current lane."""
+
+    lane_id: int = 0
+    lane_width_m: float = 3.5
+    lateral_offset_m: float = 0.0
+    is_invading: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Agent action
+# ---------------------------------------------------------------------------
+
+class AgentAction(BaseModel):
+    """Control action produced by an agent."""
+
+    throttle: float = 0.0
+    steer: float = 0.0
+    brake: float = 0.0
+
+    @field_validator("throttle")
+    @classmethod
+    def _validate_throttle(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("throttle must be between 0 and 1")
+        return v
+
+    @field_validator("steer")
+    @classmethod
+    def _validate_steer(cls, v: float) -> float:
+        if not -1.0 <= v <= 1.0:
+            raise ValueError("steer must be between -1 and 1")
+        return v
+
+    @field_validator("brake")
+    @classmethod
+    def _validate_brake(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("brake must be between 0 and 1")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# LiDAR point cloud
+# ---------------------------------------------------------------------------
+
+class LidarPointCloud(BaseModel):
+    """Metadata and points representing a LiDAR point cloud."""
+
+    timestamp: float = 0.0
+    channels: int = 0
+    points: object = Field(default_factory=list)
+
+    @property
+    def num_points(self) -> int:
+        try:
+            return len(self.points)
+        except TypeError:
+            return 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario result
+# ---------------------------------------------------------------------------
+
+class ScenarioResult(BaseModel):
+    """Final result of a scenario execution."""
+
+    scenario_name: str
+    run_id: str = ""
+    success: bool = False
+    exit_status: str = "unknown"
+    duration_s: float = 0.0
+    events: List[ScenarioEvent] = Field(default_factory=list)
+    metrics: dict[str, float] = Field(default_factory=dict)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import isfinite, tan
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -19,18 +19,6 @@ _BOX_EDGES = (
     (0, 4), (1, 5), (2, 6), (3, 7),
 )
 _NEAR_PLANE_M = 1e-3
-
-# Canonical supported object classes evaluated between CARLA GT and YOLO
-SUPPORTED_EVALUATION_CLASSES: frozenset[str] = frozenset({
-    "car",
-    "pedestrian",
-    "truck",
-    "bus",
-    "motorcycle",
-    "bicycle",
-    "traffic_light",
-    "stop_sign",
-})
 
 
 @dataclass(frozen=True)
@@ -68,24 +56,6 @@ class ValidationMetrics:
     false_positive_indices: tuple[int, ...]
     missed_ground_truth_indices: tuple[int, ...]
     failure_records: tuple[PerceptionFailureRecord, ...] = ()
-    matched_iou: float = 0.0
-    excluded_prediction_count: int = 0
-    excluded_ground_truth_count: int = 0
-
-    @property
-    def matched_box_iou(self) -> float:
-        """Alias for matched_iou."""
-        return self.matched_iou
-
-    @property
-    def mean_iou(self) -> float:
-        """Alias for matched_iou."""
-        return self.matched_iou
-
-    @property
-    def false_negatives(self) -> int:
-        """Alias for missed_detections."""
-        return self.missed_detections
 
 
 @dataclass(frozen=True)
@@ -144,11 +114,7 @@ def carla_actor_class(actor: Any) -> str | None:
     unrecognized vehicles are treated as cars. Other actor families are
     included only when their blueprint identifies a supported traffic object.
     """
-    if isinstance(actor, dict):
-        raw_type = actor.get("type_id", actor.get("object_type", ""))
-    else:
-        raw_type = getattr(actor, "type_id", "")
-    type_id = str(raw_type).lower()
+    type_id = str(getattr(actor, "type_id", "")).lower()
 
     if type_id.startswith("walker.pedestrian."):
         return "pedestrian"
@@ -159,14 +125,14 @@ def carla_actor_class(actor: Any) -> str | None:
     if not type_id.startswith("vehicle."):
         return None
 
-    remainder = type_id.split(".", maxsplit=1)[1] if "." in type_id else type_id
-    if any(token in remainder for token in ("crossbike", "bicycle", "diamondback", "omafiets")):
+    subtype = type_id.rsplit(".", maxsplit=1)[-1]
+    if any(token in subtype for token in ("crossbike", "bicycle", "diamondback")):
         return "bicycle"
-    if any(token in remainder for token in ("motorcycle", "motorbike", "ninja", "harley", "yamaha", "vespa")):
+    if any(token in subtype for token in ("motorcycle", "motorbike", "ninja")):
         return "motorcycle"
-    if "bus" in remainder:
+    if "bus" in subtype:
         return "bus"
-    if any(token in remainder for token in ("truck", "carlacola")):
+    if any(token in subtype for token in ("truck", "carlacola")):
         return "truck"
     return "car"
 
@@ -348,7 +314,6 @@ def _record(
     frame_id: int | None,
     scenario_id: str | None,
     *,
-    run_id: str | None = None,
     item: Any = None,
     ground_truth: Any = None,
     object_class: str | None = None,
@@ -386,7 +351,6 @@ def _record(
         severity=rules.severity_for(failure_type),
         frame_id=frame_id,
         scenario_id=scenario_id,
-        run_id=run_id,
         actor_id=actor_id,
         message=message,
     )
@@ -423,12 +387,9 @@ def evaluate_detections(
     ground_truth: Sequence[GroundTruthObject],
     iou_threshold: float = 0.5,
     *,
-    evaluation_classes: Sequence[str] | set[str] | None = None,
-    excluded_classes: Sequence[str] | set[str] | None = None,
     scenario_conditions: Mapping[str, Any] | None = None,
     frame_id: int | None = None,
     scenario_id: str | None = None,
-    run_id: str | None = None,
     baseline_confidence: Mapping[str, float] | None = None,
     severity_rules: FailureSeverityRules | None = None,
 ) -> ValidationMetrics:
@@ -437,9 +398,6 @@ def evaluate_detections(
     Precision and recall are reported as 0.0 when their denominator is zero.
     Candidate matches are considered in descending IoU order, and a prediction
     and ground-truth object can each participate in at most one match.
-    Predictions or ground-truth items whose class is outside ``evaluation_classes``
-    (or inside ``excluded_classes``) are excluded from matching and are not
-    counted as false positives or missed detections.
     """
     if not isfinite(iou_threshold) or not 0.0 <= iou_threshold <= 1.0:
         raise ValueError("IoU threshold must be between 0.0 and 1.0.")
@@ -449,37 +407,9 @@ def evaluate_detections(
     ground_truth_boxes: list[tuple[Sequence[float], str] | None] = []
     failure_records: list[PerceptionFailureRecord] = []
 
-    allowed_classes: set[str] | None = None
-    if evaluation_classes is not None:
-        allowed_classes = {
-            norm for c in evaluation_classes if (norm := _normalized_class(c)) is not None
-        }
-
-    disallowed_classes: set[str] | None = None
-    if excluded_classes is not None:
-        disallowed_classes = {
-            norm for c in excluded_classes if (norm := _normalized_class(c)) is not None
-        }
-
-    def _is_class_evaluated(cls_name: str) -> bool:
-        if allowed_classes is not None and cls_name not in allowed_classes:
-            return False
-        if disallowed_classes is not None and cls_name in disallowed_classes:
-            return False
-        return True
-
-    excluded_prediction_indices: set[int] = set()
-    excluded_ground_truth_indices: set[int] = set()
-
-    for idx, prediction in enumerate(predictions):
-        raw_class = _normalized_class(_field(prediction, "object_type"))
-        if raw_class is not None and not _is_class_evaluated(raw_class):
-            excluded_prediction_indices.add(idx)
-            prediction_boxes.append(None)
-            continue
+    for prediction in predictions:
         try:
-            box_and_cls = _box_and_class(prediction)
-            prediction_boxes.append(box_and_cls)
+            prediction_boxes.append(_box_and_class(prediction))
         except (AttributeError, KeyError, TypeError, ValueError):
             prediction_boxes.append(None)
             failure_records.append(
@@ -489,21 +419,14 @@ def evaluate_detections(
                     scenario_conditions,
                     frame_id,
                     scenario_id,
-                    run_id=run_id,
                     item=prediction,
                     message="Prediction is missing a valid class or bounding box.",
                 )
             )
 
-    for idx, truth in enumerate(ground_truth):
-        raw_class = _normalized_class(_field(truth, "object_type"))
-        if raw_class is not None and not _is_class_evaluated(raw_class):
-            excluded_ground_truth_indices.add(idx)
-            ground_truth_boxes.append(None)
-            continue
+    for truth in ground_truth:
         try:
-            box_and_cls = _box_and_class(truth)
-            ground_truth_boxes.append(box_and_cls)
+            ground_truth_boxes.append(_box_and_class(truth))
         except (AttributeError, KeyError, TypeError, ValueError):
             ground_truth_boxes.append(None)
             failure_records.append(
@@ -513,7 +436,6 @@ def evaluate_detections(
                     scenario_conditions,
                     frame_id,
                     scenario_id,
-                    run_id=run_id,
                     ground_truth=truth,
                     message="Ground-truth object is missing a valid class or bounding box.",
                 )
@@ -566,16 +488,10 @@ def evaluate_detections(
 
     true_positives = len(matches)
     false_positive_set = {
-        index
-        for index in range(len(predictions))
-        if index not in matched_predictions
-        and index not in excluded_prediction_indices
+        index for index in range(len(predictions)) if index not in matched_predictions
     }
     missed_ground_truth_set = {
-        index
-        for index in range(len(ground_truth))
-        if index not in matched_ground_truth
-        and index not in excluded_ground_truth_indices
+        index for index in range(len(ground_truth)) if index not in matched_ground_truth
     }
     poor_localization_pairs: list[DetectionMatch] = []
     used_false_positives: set[int] = set()
@@ -605,7 +521,6 @@ def evaluate_detections(
                 scenario_conditions,
                 frame_id,
                 scenario_id,
-                run_id=run_id,
                 item=predictions[pair.prediction_index],
                 ground_truth=ground_truth[pair.ground_truth_index],
                 confidence=_valid_confidence(predictions[pair.prediction_index]),
@@ -623,7 +538,6 @@ def evaluate_detections(
                 scenario_conditions,
                 frame_id,
                 scenario_id,
-                run_id=run_id,
                 item=predictions[index],
                 message="Prediction did not match a visible ground-truth object.",
             )
@@ -641,7 +555,6 @@ def evaluate_detections(
                 scenario_conditions,
                 frame_id,
                 scenario_id,
-                run_id=run_id,
                 ground_truth=ground_truth[index],
                 message="Visible ground-truth object has no matching prediction.",
             )
@@ -657,8 +570,6 @@ def evaluate_detections(
         and 0.0 <= float(value) <= 1.0
     }
     for index, item in enumerate(predictions):
-        if index in excluded_prediction_indices:
-            continue
         prediction = prediction_boxes[index]
         confidence = _valid_confidence(item)
         if prediction is None or confidence is None:
@@ -672,7 +583,6 @@ def evaluate_detections(
                     scenario_conditions,
                     frame_id,
                     scenario_id,
-                    run_id=run_id,
                     item=item,
                     object_class=object_class,
                     confidence=confidence,
@@ -694,7 +604,6 @@ def evaluate_detections(
                     scenario_conditions,
                     frame_id,
                     scenario_id,
-                    run_id=run_id,
                     item=item,
                     object_class=object_class,
                     confidence=confidence,
@@ -717,14 +626,10 @@ def evaluate_detections(
     )
     f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
 
-    matched_iou = (
-        sum(match.iou for match in matches) / len(matches) if matches else 0.0
-    )
-
     return ValidationMetrics(
         iou_threshold=iou_threshold,
-        prediction_count=len(predictions) - len(excluded_prediction_indices),
-        ground_truth_count=len(ground_truth) - len(excluded_ground_truth_indices),
+        prediction_count=len(predictions),
+        ground_truth_count=len(ground_truth),
         true_positives=true_positives,
         false_positives=false_positives,
         missed_detections=missed_detections,
@@ -735,235 +640,4 @@ def evaluate_detections(
         false_positive_indices=false_positive_indices,
         missed_ground_truth_indices=missed_ground_truth_indices,
         failure_records=tuple(failure_records),
-        matched_iou=matched_iou,
-        excluded_prediction_count=len(excluded_prediction_indices),
-        excluded_ground_truth_count=len(excluded_ground_truth_indices),
     )
-
-
-@dataclass(frozen=True)
-class RunValidationMetrics:
-    """Aggregated validation metrics across a full simulation run or image set."""
-
-    frames_processed: int
-    predictions: int
-    ground_truth_objects: int
-    true_positives: int
-    false_positives: int
-    missed_detections: int
-    precision: float
-    recall: float
-    f1: float
-    matched_iou: float
-    iou_threshold: float
-    failures: tuple[PerceptionFailureRecord, ...] = ()
-    scenario_id: str | None = None
-    run_id: str | None = None
-    scenario_conditions: dict[str, Any] = field(default_factory=dict)
-    parameters: dict[str, Any] = field(default_factory=dict)
-    excluded_predictions: int = 0
-    excluded_ground_truth: int = 0
-
-    @property
-    def matched_box_iou(self) -> float:
-        """Alias for matched_iou."""
-        return self.matched_iou
-
-    @property
-    def mean_iou(self) -> float:
-        """Alias for matched_iou."""
-        return self.matched_iou
-
-    @property
-    def false_negatives(self) -> int:
-        """Alias for missed_detections."""
-        return self.missed_detections
-
-    @property
-    def tp(self) -> int:
-        """Alias for true_positives."""
-        return self.true_positives
-
-    @property
-    def fp(self) -> int:
-        """Alias for false_positives."""
-        return self.false_positives
-
-    @property
-    def fn(self) -> int:
-        """Alias for missed_detections."""
-        return self.missed_detections
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert aggregated metrics to a JSON-serializable dictionary."""
-        return {
-            "iou_threshold": self.iou_threshold,
-            "frames_processed": self.frames_processed,
-            "predictions": self.predictions,
-            "ground_truth_objects": self.ground_truth_objects,
-            "true_positives": self.true_positives,
-            "false_positives": self.false_positives,
-            "missed_detections": self.missed_detections,
-            "precision": self.precision,
-            "recall": self.recall,
-            "f1": self.f1,
-            "matched_iou": self.matched_iou,
-            "matched_box_iou": self.matched_iou,
-            "aggregation": "micro-averaged counts across processed frames",
-            "zero_denominator_convention": "metric is 0.0",
-            "scenario_id": self.scenario_id,
-            "run_id": self.run_id,
-            "scenario_conditions": self.scenario_conditions,
-            "parameters": self.parameters,
-            "excluded_predictions": self.excluded_predictions,
-            "excluded_ground_truth": self.excluded_ground_truth,
-            "failure_count": len(self.failures),
-        }
-
-
-def aggregate_run_metrics(
-    frame_metrics: Sequence[ValidationMetrics],
-    *,
-    scenario_id: str | None = None,
-    run_id: str | None = None,
-    scenario_conditions: Mapping[str, Any] | None = None,
-    parameters: Mapping[str, Any] | None = None,
-    iou_threshold: float | None = None,
-) -> RunValidationMetrics:
-    """Aggregate per-frame validation metrics using micro-averaged total counts.
-
-    Run-level precision and recall are calculated from total true positives,
-    false positives, and missed detections across all frames, rather than
-    averaging frame-level ratios.
-    """
-    frames_processed = len(frame_metrics)
-    total_tp = sum(m.true_positives for m in frame_metrics)
-    total_fp = sum(m.false_positives for m in frame_metrics)
-    total_fn = sum(m.missed_detections for m in frame_metrics)
-    total_pred = sum(m.prediction_count for m in frame_metrics)
-    total_gt = sum(m.ground_truth_count for m in frame_metrics)
-    total_excluded_pred = sum(m.excluded_prediction_count for m in frame_metrics)
-    total_excluded_gt = sum(m.excluded_ground_truth_count for m in frame_metrics)
-
-    precision = (
-        total_tp / (total_tp + total_fp)
-        if (total_tp + total_fp)
-        else 0.0
-    )
-    recall = (
-        total_tp / (total_tp + total_fn)
-        if (total_tp + total_fn)
-        else 0.0
-    )
-    f1 = (
-        2.0 * precision * recall / (precision + recall)
-        if (precision + recall)
-        else 0.0
-    )
-
-    all_matches = [match for m in frame_metrics for match in m.matches]
-    matched_iou = (
-        sum(match.iou for match in all_matches) / len(all_matches)
-        if all_matches
-        else 0.0
-    )
-
-    all_failures: list[PerceptionFailureRecord] = []
-    for m in frame_metrics:
-        all_failures.extend(m.failure_records)
-
-    effective_iou_threshold = (
-        iou_threshold
-        if iou_threshold is not None
-        else (frame_metrics[0].iou_threshold if frame_metrics else 0.5)
-    )
-
-    return RunValidationMetrics(
-        frames_processed=frames_processed,
-        predictions=total_pred,
-        ground_truth_objects=total_gt,
-        true_positives=total_tp,
-        false_positives=total_fp,
-        missed_detections=total_fn,
-        precision=precision,
-        recall=recall,
-        f1=f1,
-        matched_iou=matched_iou,
-        iou_threshold=effective_iou_threshold,
-        failures=tuple(all_failures),
-        scenario_id=scenario_id,
-        run_id=run_id,
-        scenario_conditions=dict(scenario_conditions or {}),
-        parameters=dict(parameters or {}),
-        excluded_predictions=total_excluded_pred,
-        excluded_ground_truth=total_excluded_gt,
-    )
-
-
-def export_run_report(
-    run_metrics: RunValidationMetrics | Mapping[str, Any],
-    destination: str | Path,
-    *,
-    failures_destination: str | Path | None = None,
-    failure_format: Literal["json", "jsonl"] | None = None,
-) -> tuple[Path, Path | None]:
-    """Persist structured per-run metrics and failure records to disk.
-
-    Parameters
-    ----------
-    run_metrics:
-        A ``RunValidationMetrics`` instance or dictionary containing run metrics.
-    destination:
-        File path to save the run metrics JSON.
-    failures_destination:
-        Optional file path to save structured failure records (JSON or JSONL).
-    failure_format:
-        Optional format override ('json' or 'jsonl').
-
-    Returns
-    -------
-    tuple[Path, Path | None]
-        Paths to the saved metrics file and failures file (if saved).
-    """
-    dest_path = Path(destination)
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if hasattr(run_metrics, "to_dict"):
-        metrics_dict = run_metrics.to_dict()
-        failures = getattr(run_metrics, "failures", ())
-    else:
-        metrics_dict = dict(run_metrics)
-        failures = metrics_dict.get("failures", ())
-
-    dest_path.write_text(
-        json.dumps(metrics_dict, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    failures_path: Path | None = None
-    if failures_destination is not None:
-        failures_path = Path(failures_destination)
-        failure_objs = [
-            f if isinstance(f, PerceptionFailureRecord) else PerceptionFailureRecord.model_validate(f)
-            for f in failures
-        ]
-        export_failure_report(failure_objs, failures_path, format=failure_format)
-
-    return dest_path, failures_path
-
-
-__all__ = [
-    "SUPPORTED_EVALUATION_CLASSES",
-    "DetectionMatch",
-    "FailureSeverityRules",
-    "GroundTruthObject",
-    "RunValidationMetrics",
-    "ValidationMetrics",
-    "aggregate_run_metrics",
-    "carla_actor_class",
-    "evaluate_detections",
-    "export_failure_report",
-    "export_run_report",
-    "extract_carla_ground_truth",
-    "project_carla_actor_bbox",
-]

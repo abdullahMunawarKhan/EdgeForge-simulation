@@ -1,25 +1,37 @@
 """
-YOLOv8 object detector for EdgeForge.
+YOLO object detector for EdgeForge.
 
-This module provides 2D object detection on camera frames using Ultralytics YOLOv8.
-It filters detections for autonomous driving relevant traffic participants (pedestrian,
-car, truck, bus, motorcycle, bicycle) and yields clean detection primitives (RawDetection)
-ready for downstream tracking and distance estimation.
+Detects all classes supported by the loaded Ultralytics YOLO model.
+Known traffic participants are mapped to EdgeForge domain names, while
+other detected classes are preserved for downstream perception.
+
+Returns RawDetection primitives containing 2D bounding boxes,
+class names, confidence scores, and class IDs.
 """
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 from edgeforge.config.settings import settings
+from edgeforge.data.models import DetectedObject
 from edgeforge.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# COCO class name to EdgeForge domain class name mapping
+
+# Map known COCO labels to EdgeForge domain labels.
+# Unmapped classes are retained automatically.
 COCO_CLASS_MAP: Dict[str, str] = {
     "person": "pedestrian",
     "car": "car",
@@ -27,20 +39,29 @@ COCO_CLASS_MAP: Dict[str, str] = {
     "bicycle": "bicycle",
     "bus": "bus",
     "truck": "truck",
+    "traffic light": "traffic_light",
+    "stop sign": "stop_sign",
+    "fire hydrant": "fire_hydrant",
+    "parking meter": "parking_meter",
+    "sports ball": "sports_ball",
+    "potted plant": "potted_plant",
+    "dining table": "dining_table",
+    "cell phone": "cell_phone",
+    "tv": "tv",
+    "wine glass": "wine_glass",
+    "hot dog": "hot_dog",
+    "teddy bear": "teddy_bear",
+    "hair drier": "hair_drier",
 }
 
 
 @dataclass
 class RawDetection:
-    """Raw perception primitive from the 2D detector.
+    """Raw 2D detection produced by the object detector."""
 
-    Contains 2D image coordinates and classification before downstream
-    temporal tracking, monocular depth estimation, or risk scoring.
-    """
-
-    bbox: List[float]  # [x1, y1, x2, y2] in pixel coords
-    object_type: str  # mapped class name (e.g. "pedestrian", "car")
-    confidence: float  # [0.0, 1.0]
+    bbox: List[float]
+    object_type: str
+    confidence: float
     class_id: Optional[int] = None
 
     def __getitem__(self, item: str) -> Any:
@@ -56,59 +77,85 @@ class RawDetection:
 
 
 class ObjectDetector:
-    """YOLOv8-based 2D object detector for EdgeForge perception.
+    """YOLO-based object detector for EdgeForge.
 
-    Accepts BGR frames, runs YOLO inference, filters for relevant traffic
-    participants, and returns RawDetection primitives.
-
-    Compatibility behavior:
-      * When ``model_name`` is None (default), operates in placeholder mode
-        (``model_loaded=False``, ``detect()`` returns []), preserving foundation tests.
-      * When ``model_name`` is provided (e.g. ``"yolov8n.pt"``), loads and runs
-        the Ultralytics model on the specified device (CPU by default).
+    Parameters
+    ----------
+    model_name:
+        Model path or Ultralytics model name. None disables inference
+        unless a model instance is supplied.
+    confidence_threshold:
+        Minimum confidence for a detection. Defaults to 0.15 to improve
+        recall during initial testing.
+    device:
+        Inference device, such as "cpu", "0", or "cuda:0", depending
+        on the installed Ultralytics/PyTorch configuration.
+    model:
+        Optional preloaded model instance.
+    lazy_load:
+        If False, load the model during initialization.
     """
 
-    DEFAULT_MODEL: str = "yolov8n.pt"
+    DEFAULT_MODEL: str = settings.YOLO_MODEL_PATH
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
+        model_name: Optional[str] = settings.YOLO_MODEL_PATH,
         confidence_threshold: Optional[float] = None,
-        device: str = "cpu",
+        device: Optional[str] = None,
         model: Optional[Any] = None,
         lazy_load: bool = True,
     ) -> None:
         self.model_name = model_name
-        self.confidence_threshold = (
+
+        configured_confidence = (
             confidence_threshold
             if confidence_threshold is not None
-            else settings.DETECTION_CONFIDENCE_THRESHOLD
+            else getattr(settings, "DETECTION_CONFIDENCE_THRESHOLD", 0.15)
         )
-        self.device = device
+
+        self.confidence_threshold = float(configured_confidence)
+
+        if not 0.0 <= self.confidence_threshold <= 1.0:
+            raise ValueError(
+                "confidence_threshold must be between 0.0 and 1.0"
+            )
+
+        self.device = (
+            device
+            if device is not None
+            else settings.YOLO_DEVICE
+        )
+
         self._model = model
         self._model_loaded = model is not None
         self._initialized = True
         self._detection_count = 0
+        self._last_detection_count = 0
 
         if self._model is not None:
             self._model_name_display = model_name or "custom_model"
         elif self.model_name is not None:
             self._model_name_display = self.model_name
+
             if not lazy_load:
                 self._load_model()
         else:
             self._model_name_display = "none (placeholder)"
 
         logger.info(
-            f"ObjectDetector initialized (model={self._model_name_display}, "
-            f"loaded={self._model_loaded}, conf_thresh={self.confidence_threshold:.2f}, "
+            "ObjectDetector initialized "
+            f"(model={self._model_name_display}, "
+            f"loaded={self._model_loaded}, "
+            f"conf_thresh={self.confidence_threshold:.2f}, "
             f"device={self.device})"
         )
 
     def _load_model(self) -> None:
-        """Load the YOLOv8 model safely."""
+        """Load the configured Ultralytics YOLO model."""
         if self._model_loaded:
             return
+
         if not self.model_name:
             return
 
@@ -116,62 +163,105 @@ class ObjectDetector:
             from ultralytics import YOLO
 
             logger.info(
-                f"Loading YOLO model '{self.model_name}' on device '{self.device}'..."
+                f"Loading YOLO model '{self.model_name}' "
+                f"on device '{self.device}'..."
             )
+
             self._model = YOLO(self.model_name)
             self._model_loaded = True
-            logger.info(f"YOLO model '{self.model_name}' loaded successfully.")
+
+            names = getattr(self._model, "names", None)
+
+            logger.info(
+                f"YOLO model loaded successfully; "
+                f"supported_classes={len(names) if names else 'unknown'}"
+            )
+
+            if isinstance(names, dict):
+                logger.debug(f"YOLO class names: {names}")
+
         except Exception as exc:
             self._model_loaded = False
             self._model = None
-            logger.error(f"Failed to load YOLO model '{self.model_name}': {exc}")
+
+            logger.exception(
+                f"Failed to load YOLO model '{self.model_name}': {exc}"
+            )
+
             raise RuntimeError(
                 f"Failed to load YOLO model '{self.model_name}': {exc}"
             ) from exc
 
+    @staticmethod
+    def _scalar(value: Any) -> Any:
+        """Convert a tensor or NumPy scalar into a Python scalar."""
+        if hasattr(value, "item"):
+            return value.item()
+        return value
+
+    @staticmethod
+    def _get_class_name(
+        result: Any,
+        model: Any,
+        class_id: int,
+    ) -> Optional[str]:
+        """Resolve a class label from result or model metadata."""
+        for owner in (result, model):
+            names = getattr(owner, "names", None)
+
+            if isinstance(names, dict) and class_id in names:
+                return str(names[class_id])
+
+            if isinstance(names, (list, tuple)):
+                if 0 <= class_id < len(names):
+                    return str(names[class_id])
+
+        return None
+
     def detect(self, frame: Any) -> List[RawDetection]:
-        """Run object detection on ``frame``.
-
-        Parameters
-        ----------
-        frame :
-            OpenCV / NumPy image in BGR format. If None or invalid, returns [].
-
-        Returns
-        -------
-        List[RawDetection]
-            List of detected objects with bbox, object_type, and confidence.
-        """
-        # 1. Input validation
+        """Detect all supported classes in a BGR image frame."""
         if frame is None:
-            logger.debug("detect() called with None frame; returning []")
+            logger.debug("Received None frame; returning no detections.")
             return []
+
         if not isinstance(frame, np.ndarray):
             logger.warning(
-                f"detect() received non-numpy frame: {type(frame).__name__}; returning []"
-            )
-            return []
-        if frame.size == 0 or frame.ndim not in (2, 3):
-            logger.warning(
-                f"detect() received invalid frame shape={getattr(frame, 'shape', None)}; returning []"
-            )
-            return []
-        if frame.dtype not in (np.uint8, np.float32, np.float64):
-            logger.warning(
-                f"detect() received invalid frame dtype={frame.dtype}; returning []"
+                f"Expected NumPy frame, received {type(frame).__name__}."
             )
             return []
 
-        # 2. Check placeholder / unconfigured mode
+        if (
+            frame.size == 0
+            or frame.ndim not in (2, 3)
+            or (
+                frame.ndim == 3
+                and frame.shape[2] not in (1, 3)
+            )
+        ):
+            logger.warning(
+                f"Invalid frame shape: {getattr(frame, 'shape', None)}"
+            )
+            return []
+
+        if frame.dtype not in (
+            np.uint8,
+            np.float32,
+            np.float64,
+        ):
+            logger.warning(f"Unsupported frame dtype: {frame.dtype}")
+            return []
+
         if self.model_name is None and self._model is None:
-            self._detection_count += 1
-            if self._detection_count == 1:
+            self._last_detection_count = 0
+
+            if self._detection_count == 0:
                 logger.info(
-                    "ObjectDetector.detect() running in placeholder mode (model_name=None); returning []."
+                    "Detector is in placeholder mode; inference disabled."
                 )
+
+            self._detection_count += 1
             return []
 
-        # 3. Ensure model is loaded
         if not self._model_loaded:
             self._load_model()
 
@@ -180,94 +270,155 @@ class ObjectDetector:
                 f"Model '{self.model_name}' was not loaded properly."
             )
 
-        # 4. Inference
+        height, width = frame.shape[:2]
+
+        # No class restriction: allow every class supported by the model.
         try:
-            results = self._model(
-                frame,
+            results = self._model.predict(
+                source=frame,
                 conf=self.confidence_threshold,
+                iou=settings.YOLO_NMS_IOU,
                 device=self.device,
+                classes=None,
                 verbose=False,
             )
-        except Exception as exc:
-            logger.error(f"Inference error in ObjectDetector: {exc}")
-            raise RuntimeError(f"Inference failed: {exc}") from exc
 
-        # 5. Extract and filter detections
+        except Exception as exc:
+            logger.exception(f"YOLO inference failed: {exc}")
+            raise RuntimeError(
+                f"Inference failed: {exc}"
+            ) from exc
+
         detections: List[RawDetection] = []
-        for r in results:
-            boxes = getattr(r, "boxes", None)
+
+        for result in results:
+            boxes = getattr(result, "boxes", None)
+
             if boxes is None:
                 continue
 
             for box in boxes:
-                # Extract class id
-                cls_attr = box.cls
-                if hasattr(cls_attr, "__getitem__") and hasattr(cls_attr, "__len__") and len(cls_attr) > 0:
-                    cls_val = cls_attr[0]
-                else:
-                    cls_val = cls_attr
-                cls_id = int(cls_val.item() if hasattr(cls_val, "item") else cls_val)
+                try:
+                    cls_value = self._scalar(box.cls[0])
+                    conf_value = self._scalar(box.conf[0])
 
-                # Extract confidence
-                conf_attr = box.conf
-                if hasattr(conf_attr, "__getitem__") and hasattr(conf_attr, "__len__") and len(conf_attr) > 0:
-                    conf_val = conf_attr[0]
-                else:
-                    conf_val = conf_attr
-                conf = float(conf_val.item() if hasattr(conf_val, "item") else conf_val)
+                    class_id = int(cls_value)
+                    confidence = float(conf_value)
 
-                # Resolve class name from results or model dictionary
-                raw_name: Optional[str] = None
-                if hasattr(r, "names") and isinstance(r.names, dict) and cls_id in r.names:
-                    raw_name = r.names[cls_id]
-                elif hasattr(self._model, "names") and isinstance(self._model.names, dict) and cls_id in self._model.names:
-                    raw_name = self._model.names[cls_id]
+                    if not np.isfinite(confidence):
+                        continue
 
-                if raw_name is None:
-                    continue
+                    if not 0.0 <= confidence <= 1.0:
+                        continue
+                    if confidence < self.confidence_threshold:
+                        continue
 
-                normalized_name = str(raw_name).lower().strip()
-
-                # Filter: ignore unrelated COCO classes
-                if normalized_name not in COCO_CLASS_MAP:
-                    continue
-
-                object_type = COCO_CLASS_MAP[normalized_name]
-
-                # Extract bounding box [x1, y1, x2, y2]
-                xyxy_attr = box.xyxy
-                if hasattr(xyxy_attr, "__getitem__") and hasattr(xyxy_attr, "__len__") and len(xyxy_attr) > 0:
-                    xyxy_val = xyxy_attr[0]
-                else:
-                    xyxy_val = xyxy_attr
-
-                if hasattr(xyxy_val, "tolist"):
-                    xyxy_list = xyxy_val.tolist()
-                elif hasattr(xyxy_val, "__iter__"):
-                    xyxy_list = list(xyxy_val)
-                else:
-                    xyxy_list = [0.0, 0.0, 0.0, 0.0]
-
-                bbox = [float(c) for c in xyxy_list]
-
-                detections.append(
-                    RawDetection(
-                        bbox=bbox,
-                        object_type=object_type,
-                        confidence=conf,
-                        class_id=cls_id,
+                    raw_name = self._get_class_name(
+                        result,
+                        self._model,
+                        class_id,
                     )
-                )
+
+                    if raw_name is None:
+                        logger.debug(
+                            f"No class label available for ID {class_id}; "
+                            "skipping detection."
+                        )
+                        continue
+
+                    normalized_name = raw_name.lower().strip()
+
+                    if not normalized_name:
+                        continue
+
+                    # Map known classes and preserve all other classes.
+                    object_type = COCO_CLASS_MAP.get(
+                        normalized_name,
+                        normalized_name.replace(" ", "_"),
+                    )
+
+                    xyxy = box.xyxy[0]
+
+                    if hasattr(xyxy, "tolist"):
+                        coordinates = xyxy.tolist()
+                    else:
+                        coordinates = list(xyxy)
+
+                    if len(coordinates) != 4:
+                        continue
+
+                    x1, y1, x2, y2 = (
+                        float(coordinate)
+                        for coordinate in coordinates
+                    )
+
+                    if not np.all(
+                        np.isfinite([x1, y1, x2, y2])
+                    ):
+                        continue
+
+                    # Clamp coordinates to the frame boundaries.
+                    x1 = max(0.0, min(x1, float(width)))
+                    y1 = max(0.0, min(y1, float(height)))
+                    x2 = max(0.0, min(x2, float(width)))
+                    y2 = max(0.0, min(y2, float(height)))
+
+                    # Reject empty or inverted bounding boxes.
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
+                    detections.append(
+                        RawDetection(
+                            bbox=[x1, y1, x2, y2],
+                            object_type=object_type,
+                            confidence=confidence,
+                            class_id=class_id,
+                        )
+                    )
+
+                except (TypeError, ValueError, IndexError, AttributeError) as exc:
+                    logger.debug(
+                        f"Skipping malformed YOLO detection: {exc}"
+                    )
+                    continue
 
         self._detection_count += 1
+        self._last_detection_count = len(detections)
+
+        logger.info(
+            "YOLO inference: "
+            f"model_loaded={self._model_loaded}, "
+            f"detections={len(detections)}, "
+            f"classes={[d.object_type for d in detections]}"
+        )
+
         return detections
 
+    def detect_objects(self, frame: Any) -> List[DetectedObject]:
+        """Convert raw detections into EdgeForge shared data models."""
+        return [
+            DetectedObject(
+                object_type=detection.object_type,
+                confidence=detection.confidence,
+                bbox=list(detection.bbox),
+                distance=None,
+                relative_speed=None,
+            )
+            for detection in self.detect(frame)
+        ]
+
     def get_status(self) -> Dict[str, Any]:
-        """Return a short human/JSON friendly status report."""
+        """Return a JSON-friendly detector status report."""
         return {
             "module": "object_detector",
-            "status": "initialized" if self._initialized else "not_initialized",
+            "status": (
+                "initialized"
+                if self._initialized
+                else "not_initialized"
+            ),
             "model_loaded": self._model_loaded,
             "model_name": self._model_name_display,
+            "confidence_threshold": self.confidence_threshold,
             "total_detection_calls": self._detection_count,
+            "last_detection_count": self._last_detection_count,
         }

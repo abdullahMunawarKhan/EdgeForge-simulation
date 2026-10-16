@@ -1,23 +1,29 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
 import carla
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from edgeforge.config.settings import settings
 
 
 def main():
-    print("Connecting to CARLA...")
+    client = carla.Client(settings.CARLA_HOST, settings.CARLA_PORT)
+    client.set_timeout(15.0)
 
-    client = carla.Client("127.0.0.1", 2000)
-    client.set_timeout(10.0)
+    print("Client version:", client.get_client_version())
+    print("Server version:", client.get_server_version())
 
     world = client.get_world()
-
-    print("✅ Connected to CARLA!")
-    print(f"Map: {world.get_map().name}")
-
-    weather = world.get_weather()
-
-    print(f"Cloudiness: {weather.cloudiness}")
-    print(f"Rain: {weather.precipitation}")
-    print(f"Fog: {weather.fog_density}")
+    print("Current map:", world.get_map().name)
+    print("EdgeForge connected to remote CARLA!")
 
 
 if __name__ == "__main__":
     main()
+    

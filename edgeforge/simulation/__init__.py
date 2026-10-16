@@ -6,17 +6,49 @@ in this package.  The rest of EdgeForge (perception / analysis / config /
 data) must NOT depend on carla – that way they remain testable without a
 running simulator.
 
-Currently exposed test scripts:
-  - camera_test.py       : Spawns a vehicle + RGB camera and streams frames.
-  - spawn_vehicle.py     : Basic vehicle spawning smoke test.
-  - test_connection.py   : Minimal CARLA connection health check.
-
-TODO:
-  * carla_world.py       : Managed CARLA world + synchronous mode wrapper.
-  * vehicle_controller.py: Ego-vehicle control interface (manual / autopilot / agent).
-  * sensor_manager.py    : Spawn + configure sensors and pipe data to the perception stack.
-  * scenario_runner.py   : Load scenario configs and orchestrate traffic, events, checks.
-  * data_recorder.py     : Record sensor data + ground-truth for later training/analysis.
+Public surface (Person 1 / Simulation Lead deliverables):
+  - CarlaClient       — managed synchronous-mode connection + lifecycle
+  - WorldSnapshot     — typed frame/timestamp descriptor
+  - ActorManager      — ego + NPC (vehicles/peds/bicycles) spawning
+  - EgoBundle / TrafficBundle — typed actor-spawn result objects
+  - SensorManager     — sensor factory (RGB, collision, lane invasion, ...)
+  - SensorFrame       — typed per-frame data packet (image + state + events)
+  - ScenarioRunner    — end-to-end scenario orchestrator (JSON config)
+  - ScenarioInfo      — scenario metadata descriptor
+  - image_to_bgr      — adapter: carla.Image  → np.ndarray (BGR)
+  - vehicle_to_state  — adapter: carla.Vehicle → VehicleState (Pydantic)
 """
 
-__all__: list = []
+from edgeforge.simulation.actor_manager import (
+    ActorManager,
+    EgoBundle,
+    TrafficBundle,
+)
+from edgeforge.simulation.carla_client import (
+    CarlaClient,
+    WorldSnapshot,
+)
+from edgeforge.simulation.scenario_runner import (
+    ScenarioInfo,
+    ScenarioRunner,
+)
+from edgeforge.simulation.sensor_manager import (
+    SensorFrame,
+    SensorManager,
+    image_to_bgr,
+    vehicle_to_state,
+)
+
+__all__ = [
+    "ActorManager",
+    "CarlaClient",
+    "EgoBundle",
+    "ScenarioInfo",
+    "ScenarioRunner",
+    "SensorFrame",
+    "SensorManager",
+    "TrafficBundle",
+    "WorldSnapshot",
+    "image_to_bgr",
+    "vehicle_to_state",
+]

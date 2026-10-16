@@ -65,7 +65,7 @@ def test_camera_processor_resize() -> None:
 
 # ---- ObjectDetector ---------------------------------------------------------
 def test_detector_returns_empty_list_on_valid_frame() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     result = det.detect(frame)
     assert isinstance(result, list)
@@ -73,12 +73,12 @@ def test_detector_returns_empty_list_on_valid_frame() -> None:
 
 
 def test_detector_handles_none_gracefully() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     assert det.detect(None) == []
 
 
 def test_detector_status_shows_no_model_loaded() -> None:
-    det = ObjectDetector()
+    det = ObjectDetector(model_name=None)
     status = det.get_status()
     assert status["module"] == "object_detector"
     assert status["model_loaded"] is False
@@ -114,6 +114,142 @@ def test_risk_engine_close_and_climbing_is_high_or_critical() -> None:
     assert len(out.reason) > 0
 
 
+def test_risk_engine_handles_unknown_detection_distance_and_speed() -> None:
+    out = RiskEngine().calculate_risk(
+        [DetectedObject(object_type="car", distance=None, relative_speed=None)],
+        VehicleState(),
+    )
+    assert out.risk_score == pytest.approx(0.0)
+    assert "risk assessment is incomplete" in out.reason
+
+
 def test_risk_level_enum_values() -> None:
     # Sanity check so the dashboard colour scheme has stable labels.
     assert {r.value for r in RiskLevel} == {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+
+
+# ---- MockCarlaClient --------------------------------------------------------
+def test_mock_client_connect_and_ticks() -> None:
+    from edgeforge.simulation.mock_client import MockCarlaClient
+
+    client = MockCarlaClient(fixed_delta_seconds=0.05)
+    assert client.connect() is True
+    assert client.is_connected() is True
+    snap0 = client.get_snapshot()
+    assert snap0.frame == 0
+    f1 = client.tick()
+    assert f1 == 1
+    snap = client.get_snapshot()
+    assert snap.frame == 1
+    assert abs(snap.timestamp.elapsed_seconds - 0.05) < 1e-6
+
+
+def test_mock_client_blueprints_and_spawn() -> None:
+    from edgeforge.simulation.mock_client import MockCarlaClient
+
+    c = MockCarlaClient()
+    c.connect()
+    lib = c.get_blueprint_library()
+    tesla_bps = lib.filter("vehicle.tesla")
+    assert len(tesla_bps) >= 1
+    spawn_points = c.get_spawn_points()
+    assert len(spawn_points) >= 20
+    a = c.try_spawn_actor(tesla_bps[0], spawn_points[0])
+    assert a is not None
+    assert a.type_id.startswith("vehicle.")
+
+
+# ---- MockActorManager (kinematics + path) -----------------------------------
+def test_mock_actor_manager_ego_moves_with_autopilot() -> None:
+    from edgeforge.simulation.mock_actor_manager import MockActorManager
+    from edgeforge.simulation.mock_client import MockCarlaClient
+    from edgeforge.simulation.scenario_runner import _advance_mock_actors
+
+    client = MockCarlaClient(fixed_delta_seconds=0.05)
+    client.connect()
+    mgr = MockActorManager(client)
+    bundle = mgr.spawn_ego({"model": "vehicle.toyota.prius", "autopilot": True, "speed_limit": 60})
+    bundle.vehicle.attributes["is_ego"] = True
+    start_x = bundle.vehicle.transform.x
+    start_speed = bundle.vehicle.state.speed_kmh
+    for _ in range(200):
+        _advance_mock_actors(client, 0.05)
+        client.tick()
+    moved_m = bundle.vehicle.transform.x - start_x
+    gained = bundle.vehicle.state.speed_kmh - start_speed
+    assert moved_m > 20.0, f"Ego should move forward (moved {moved_m:.1f}m)"
+    assert gained > 15.0, f"Ego should speed up on autopilot (gained {gained:.1f} km/h)"
+
+
+# ---- MockSensorManager (RGB frames produced) --------------------------------
+def test_mock_sensor_manager_produces_rgb() -> None:
+    from edgeforge.simulation.mock_client import MockCarlaClient
+    from edgeforge.simulation.mock_sensor_manager import MockSensorManager
+    import numpy as np
+
+    c = MockCarlaClient()
+    c.connect()
+    bp = c.get_blueprint_library().filter("vehicle.tesla")[0]
+    sp = c.get_spawn_points()[0]
+    ego = c.try_spawn_actor(bp, sp)
+    sm = MockSensorManager(c)
+    W, H = 320, 240
+    sm.build_suite(ego, {"rgb_camera": {"enabled": True, "width": W, "height": H, "tick": 0.05}})
+    # Frame 0 — push tick and validate a frame was emitted
+    sm.update_for_tick(frame_number=1, sim_time_s=0.05, actors=[])
+    assert sm.latest_rgb is not None
+    assert sm.latest_rgb.shape == (H, W, 3)
+    assert sm.latest_rgb.dtype == np.uint8
+    # Ensure the synthetic image isn't just a blank canvas (pixel variation)
+    assert sm.latest_rgb.std() > 5.0, "Mock RGB frame should have visible variation"
+
+
+# ---- ScenarioRunner backend dispatch + full loop (end-to-end mock) ----------
+def test_scenario_runner_backend_mock_end_to_end() -> None:
+    import json
+    import tempfile
+    from pathlib import Path
+    from edgeforge.simulation import ScenarioRunner, SensorFrame
+
+    cfg = {
+        "name": "mock_test",
+        "version": "1.0",
+        "description": "ci-test",
+        "duration_seconds": 0.5,
+        "weather": "ClearNoon",
+        "map": "Town01",
+        "simulation": {"backend": "mock"},
+        "traffic": {"vehicles": 2, "pedestrians": 1, "bicycles": 0},
+        "ego_vehicle": {"model": "vehicle.tesla.model3", "spawn_point_index": 0, "autopilot": True, "speed_limit": 50},
+        "sensors": {
+            "rgb_camera": {"enabled": True, "width": 160, "height": 120, "tick": 0.1},
+            "collision": {"enabled": True},
+            "lane_invasion": {"enabled": True},
+        },
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "scen.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+
+        runner = ScenarioRunner.from_config(str(p), backend="mock")
+        assert runner.backend == "mock"
+        assert runner.info.backend == "mock"
+
+        frames_seen = 0
+        seen_vehicle_state = False
+        seen_rgb = False
+        with runner.run() as stream:
+            for frame in stream:
+                assert isinstance(frame, SensorFrame)
+                frames_seen += 1
+                if frame.vehicle_state is not None:
+                    seen_vehicle_state = True
+                    assert frame.vehicle_state.speed is not None
+                    assert frame.vehicle_state.location is not None
+                if frame.rgb is not None:
+                    seen_rgb = True
+
+        # 0.5s / 0.05 = 10 ticks; warmup happens first so we should see >= 5
+        assert frames_seen >= 3, f"Expected frames, got {frames_seen}"
+        assert seen_vehicle_state, "Every mock scenario should emit VehicleState"
+        assert seen_rgb, "RGB camera enabled → frames should flow"

@@ -18,10 +18,7 @@ import atexit
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
-try:
-    import carla
-except ImportError:
-    carla = None  # type: ignore[assignment]
+import carla
 
 from edgeforge.config import settings
 from edgeforge.utils import get_logger
@@ -84,10 +81,6 @@ class CarlaClient:
     # ------------------------------------------------------------------
     def connect(self) -> None:
         """Open the CARLA client connection and cache handles."""
-        if carla is None:
-            raise RuntimeError(
-                "The CARLA Python API is not installed. Please install carla to connect to a CARLA server."
-            )
         logger.info(f"Connecting to CARLA at {self._host}:{self._port} ...")
         self._client = carla.Client(self._host, self._port)
         self._client.set_timeout(self._timeout)
@@ -253,8 +246,6 @@ class CarlaClient:
         Valid names correspond to ``carla.WeatherParameters`` attributes,
         e.g. ``"ClearNoon"``, ``"HardRainSunset"``, ``"WetNight"`` etc.
         """
-        if carla is None:
-            raise RuntimeError("The CARLA Python API is required to set weather presets.")
         wp_attr = getattr(carla.WeatherParameters, name, None)
         if wp_attr is None:
             raise ValueError(
@@ -263,51 +254,6 @@ class CarlaClient:
             )
         self.world.set_weather(wp_attr)
         logger.info(f"🌦  Weather preset applied: {name}")
-
-    def set_weather(
-        self,
-        weather: Any,
-        preset_base: str = "ClearNoon",
-    ) -> None:
-        """Apply either a weather preset name, WeatherParameters, or dictionary of fine-grained values.
-
-        Supports applying fine-grained continuous values (e.g. fog_density,
-        precipitation, cloudiness, sun_altitude_angle) on top of an optional
-        base preset.
-        """
-        if carla is None:
-            raise RuntimeError("The CARLA Python API is required to set weather.")
-        if isinstance(weather, str):
-            self.set_weather_preset(weather)
-            return
-        if hasattr(carla, "WeatherParameters") and isinstance(weather, carla.WeatherParameters):
-            self.world.set_weather(weather)
-            logger.info("🌦  CARLA WeatherParameters applied directly.")
-            return
-        if isinstance(weather, dict):
-            base_name = weather.get("preset", preset_base)
-            wp = getattr(carla.WeatherParameters, base_name, None)
-            if wp is None:
-                wp = carla.WeatherParameters()
-            else:
-                wp = carla.WeatherParameters(
-                    cloudiness=getattr(wp, "cloudiness", 0.0),
-                    precipitation=getattr(wp, "precipitation", 0.0),
-                    precipitation_deposits=getattr(wp, "precipitation_deposits", 0.0),
-                    wind_intensity=getattr(wp, "wind_intensity", 0.0),
-                    sun_azimuth_angle=getattr(wp, "sun_azimuth_angle", 0.0),
-                    sun_altitude_angle=getattr(wp, "sun_altitude_angle", 60.0),
-                    fog_density=getattr(wp, "fog_density", 0.0),
-                    fog_distance=getattr(wp, "fog_distance", 0.0),
-                    wetness=getattr(wp, "wetness", 0.0),
-                )
-            for k, v in weather.items():
-                if hasattr(wp, k) and isinstance(v, (int, float)):
-                    setattr(wp, k, float(v))
-            self.world.set_weather(wp)
-            logger.info(f"🌦  Fine-grained weather applied (base: {base_name}): {weather}")
-            return
-        raise TypeError(f"Unsupported weather specification: {type(weather)}")
 
     # ------------------------------------------------------------------
     # Map switching
@@ -318,8 +264,6 @@ class CarlaClient:
         ``map_name`` should be a simple name like ``"Town03"`` – this
         method will reload the world and refresh cached handles.
         """
-        if carla is None:
-            raise RuntimeError("The CARLA Python API is required to load maps.")
         logger.info(f"🗺  Requesting map load: {map_name}")
         if layer is not None:
             self.raw_client.load_world(map_name, layer)

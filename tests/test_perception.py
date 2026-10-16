@@ -9,13 +9,15 @@ These tests DO NOT require a running CARLA server and DO NOT download YOLO model
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
 from edgeforge.config import settings
-from edgeforge.data.models import DetectedObject
+from edgeforge.analysis import RiskEngine
+from edgeforge.data.models import DetectedObject, VehicleState
 from edgeforge.perception import (
     COCO_CLASS_MAP,
     CameraProcessor,
@@ -233,6 +235,12 @@ class TestObjectDetector:
     def valid_frame(self) -> np.ndarray:
         return np.zeros((480, 640, 3), dtype=np.uint8)
 
+    def test_model_and_device_default_to_settings(self) -> None:
+        detector = ObjectDetector()
+        assert detector.model_name == settings.YOLO_MODEL_PATH
+        assert detector.device == settings.YOLO_DEVICE
+        assert detector.confidence_threshold == settings.DETECTION_CONFIDENCE_THRESHOLD
+
     def test_model_none_placeholder_behavior(self, valid_frame: np.ndarray) -> None:
         det = ObjectDetector(model_name=None)
         status = det.get_status()
@@ -303,6 +311,13 @@ class TestObjectDetector:
         mock_result.boxes = mock_boxes
         return mock_result
 
+    def _create_mock_yolo_model(self, result: Any) -> MagicMock:
+        """Configure a model mock with the Ultralytics predict() interface."""
+        mock_model = MagicMock()
+        mock_model.predict.return_value = [result]
+        mock_model.names = result.names
+        return mock_model
+
     def test_mock_yolo_inference_and_class_mapping(self, valid_frame: np.ndarray) -> None:
         """Verify COCO class mapping for all required autonomous driving classes."""
         mock_boxes_info = [
@@ -314,10 +329,7 @@ class TestObjectDetector:
             {"cls_id": 1, "conf": 0.65, "xyxy": [80.0, 90.0, 110.0, 150.0]},  # bicycle -> bicycle
         ]
         mock_res = self._create_mock_yolo_result(mock_boxes_info)
-
-        mock_model = MagicMock()
-        mock_model.return_value = [mock_res]
-        mock_model.names = mock_res.names
+        mock_model = self._create_mock_yolo_model(mock_res)
 
         det = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
         assert det.get_status()["model_loaded"] is True
@@ -338,8 +350,10 @@ class TestObjectDetector:
         assert first.bbox == [10.0, 20.0, 50.0, 100.0]
         assert first.confidence == pytest.approx(0.91, abs=1e-4)
 
-    def test_ignores_unrelated_coco_classes(self, valid_frame: np.ndarray) -> None:
-        """Verify irrelevant objects (dog, traffic light, stop sign, chair) are filtered out."""
+    def test_retains_all_model_classes_and_maps_known_classes(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        """Keep supported model classes while normalizing known traffic labels."""
         mock_boxes_info = [
             {"cls_id": 2, "conf": 0.88, "xyxy": [10.0, 20.0, 50.0, 60.0]},    # car (KEEP)
             {"cls_id": 9, "conf": 0.95, "xyxy": [100.0, 10.0, 120.0, 40.0]},  # traffic light (IGNORE)
@@ -349,28 +363,26 @@ class TestObjectDetector:
             {"cls_id": 0, "conf": 0.92, "xyxy": [15.0, 25.0, 45.0, 85.0]},    # person (KEEP)
         ]
         mock_res = self._create_mock_yolo_result(mock_boxes_info)
-
-        mock_model = MagicMock()
-        mock_model.return_value = [mock_res]
-        mock_model.names = mock_res.names
+        mock_model = self._create_mock_yolo_model(mock_res)
 
         det = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
         detections = det.detect(valid_frame)
 
-        # Only car and person should be retained
-        assert len(detections) == 2
-        detected_types = [d.object_type for d in detections]
-        assert "car" in detected_types
-        assert "pedestrian" in detected_types
-        assert "dog" not in detected_types
-        assert "traffic light" not in detected_types
-        assert "stop sign" not in detected_types
+        assert len(detections) == len(mock_boxes_info)
+        detected_types = {d.object_type for d in detections}
+        assert detected_types == {
+            "car",
+            "traffic_light",
+            "stop_sign",
+            "dog",
+            "chair",
+            "pedestrian",
+        }
 
     def test_confidence_threshold_passed_to_model(self, valid_frame: np.ndarray) -> None:
         """Verify the confidence threshold is properly passed to the YOLO inference call."""
         mock_res = self._create_mock_yolo_result([])
-        mock_model = MagicMock()
-        mock_model.return_value = [mock_res]
+        mock_model = self._create_mock_yolo_model(mock_res)
 
         det = ObjectDetector(
             model_name="mock_yolo.pt",
@@ -380,12 +392,130 @@ class TestObjectDetector:
         )
         det.detect(valid_frame)
 
-        mock_model.assert_called_once_with(
-            valid_frame,
+        mock_model.predict.assert_called_once_with(
+            source=valid_frame,
             conf=0.72,
+            iou=settings.YOLO_NMS_IOU,
             device="cpu",
+            classes=None,
             verbose=False,
         )
+
+    def test_detect_objects_returns_shared_models_without_fake_motion(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        mock_result = self._create_mock_yolo_result([
+            {"cls_id": 2, "conf": 0.88, "xyxy": [10.0, 20.0, 50.0, 60.0]},
+        ])
+        mock_model = self._create_mock_yolo_model(mock_result)
+        detector = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
+
+        detections = detector.detect_objects(valid_frame)
+
+        assert len(detections) == 1
+        detection = detections[0]
+        assert isinstance(detection, DetectedObject)
+        assert detection.object_type == "car"
+        assert detection.confidence == pytest.approx(0.88)
+        assert detection.bbox == [10.0, 20.0, 50.0, 60.0]
+        assert detection.distance is None
+        assert detection.relative_speed is None
+
+    def test_detect_objects_returns_empty_for_no_yolo_boxes(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        mock_model = self._create_mock_yolo_model(self._create_mock_yolo_result([]))
+        detector = ObjectDetector(model_name="mock_yolo.pt", model=mock_model)
+
+        assert detector.detect_objects(valid_frame) == []
+
+    def test_supports_list_names_and_preserves_unknown_classes(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        result = MagicMock()
+        result.names = ["person", "traffic light", "traffic cone"]
+        result.boxes = [
+            SimpleNamespace(cls=np.array([0]), conf=np.array([0.8]), xyxy=np.array([[1, 1, 8, 8]])),
+            SimpleNamespace(cls=np.array([1]), conf=np.array([0.9]), xyxy=np.array([[9, 1, 16, 8]])),
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.7]), xyxy=np.array([[17, 1, 24, 8]])),
+        ]
+        model = self._create_mock_yolo_model(result)
+        # The model's names are the authoritative class metadata.
+        model.names = result.names
+
+        detections = ObjectDetector(model_name="mock.pt", model=model).detect(valid_frame)
+
+        assert [d.object_type for d in detections] == [
+            "pedestrian",
+            "traffic_light",
+            "traffic_cone",
+        ]
+
+    def test_confidence_threshold_filters_returned_boxes(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        result = MagicMock()
+        result.names = {2: "car"}
+        result.boxes = [
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.71]), xyxy=np.array([[1, 1, 8, 8]])),
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.50]), xyxy=np.array([[9, 1, 16, 8]])),
+        ]
+        model = self._create_mock_yolo_model(result)
+        detector = ObjectDetector(
+            model_name="mock.pt",
+            confidence_threshold=0.7,
+            model=model,
+        )
+
+        detections = detector.detect(valid_frame)
+
+        assert len(detections) == 1
+        assert detections[0].confidence == pytest.approx(0.71)
+
+    def test_missing_boxes_and_malformed_bboxes_are_skipped(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        missing_boxes = MagicMock()
+        missing_boxes.boxes = None
+        missing_boxes.names = {2: "car"}
+
+        malformed_boxes = MagicMock()
+        malformed_boxes.names = {2: "car"}
+        malformed_boxes.boxes = [
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.8]), xyxy=np.array([[1, 2, 3]])),
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.8]), xyxy=np.array([[10, 10, 5, 5]])),
+            SimpleNamespace(cls=np.array([2]), conf=np.array([0.8]), xyxy=np.array([[1, 1, 8, 8]])),
+        ]
+        model = MagicMock()
+        model.predict.return_value = [missing_boxes, malformed_boxes]
+        model.names = {2: "car"}
+
+        detections = ObjectDetector(model_name="mock.pt", model=model).detect(valid_frame)
+
+        assert len(detections) == 1
+        assert detections[0].bbox == [1.0, 1.0, 8.0, 8.0]
+
+    def test_predict_detections_work_with_pipeline_and_risk_engine(
+        self, valid_frame: np.ndarray
+    ) -> None:
+        result = self._create_mock_yolo_result([
+            {"cls_id": 2, "conf": 0.9, "xyxy": [100.0, 100.0, 200.0, 260.0]},
+        ])
+        detector = ObjectDetector(
+            model_name="mock.pt",
+            model=self._create_mock_yolo_model(result),
+        )
+
+        detections = PerceptionPipeline(detector=detector).process_frame(
+            valid_frame,
+            timestamp=1.0,
+        )
+        assessment = RiskEngine().calculate_risk(detections, VehicleState())
+
+        assert len(detections) == 1
+        assert detections[0].distance is not None and detections[0].distance > 0
+        assert detections[0].relative_speed == 0.0
+        assert 0.0 <= assessment.risk_score <= 1.0
 
 
 # ==============================================================================

@@ -16,10 +16,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import carla
-except ImportError:
-    carla = None  # type: ignore[assignment]
+import carla
 
 from edgeforge.utils import get_logger
 
@@ -75,8 +72,6 @@ class ActorManager:
           * ``speed_limit``    -- km/h; only advisory, used for autopilot hint
           * ``autopilot``      -- bool; enable TrafficManager autopilot
         """
-        if carla is None:
-            raise RuntimeError("The CARLA Python API is required to spawn CARLA actors.")
         world = self._client.world
         bp_lib = self._client.blueprint_library
         spawn_points = self._client.map.get_spawn_points()
@@ -144,8 +139,6 @@ class ActorManager:
     # ------------------------------------------------------------------
     def spawn_traffic(self, cfg: Dict[str, Any]) -> TrafficBundle:
         """Spawn background traffic according to the ``traffic`` cfg block."""
-        if carla is None:
-            raise RuntimeError("The CARLA Python API is required to spawn CARLA traffic.")
 
         n_vehicles = int(cfg.get("vehicles", 0))
         n_pedestrians = int(cfg.get("pedestrians", 0))

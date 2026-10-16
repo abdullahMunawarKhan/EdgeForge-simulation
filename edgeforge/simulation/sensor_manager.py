@@ -21,10 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-try:
-    import carla
-except ImportError:
-    carla = None
+import carla
 import numpy as np
 
 from edgeforge.config import settings
@@ -137,11 +134,6 @@ class SensorManager:
         sensor_spec: Dict[str, Any],
     ) -> None:
         """Spawn every sensor declared in ``sensor_spec`` and attach to vehicle."""
-        if carla is None:
-            raise RuntimeError(
-                "The CARLA Python API is required to attach CARLA sensors. "
-                "Install carla or run inside an environment with the CARLA client library."
-            )
 
         rgb_cfg = sensor_spec.get("rgb_camera", {})
         if rgb_cfg.get("enabled", False):
