@@ -82,6 +82,7 @@ class ScenarioInfo:
     weather_preset: str
     map_name: Optional[str]
     backend: str = BACKEND_CARLA
+    fine_weather: Optional[Dict[str, float]] = None
 
 
 def _parse_backend(cfg: Dict[str, Any], override: Optional[str]) -> str:
@@ -232,12 +233,30 @@ class ScenarioRunner:
         else:
             self._backend = backend_cfg
 
+        # Parse weather: preserve both preset and fine-grained continuous values
+        weather_raw = config.get("weather", "ClearNoon")
+        fine_weather: Optional[Dict[str, float]] = None
+        if isinstance(weather_raw, dict):
+            fine_weather = {k: float(v) for k, v in weather_raw.items() if isinstance(v, (int, float))}
+            weather_preset = str(weather_raw.get("preset", "ClearNoon"))
+        else:
+            weather_preset = str(weather_raw)
+
+        # Check for fine_weather in root or generated_metadata
+        if "fine_weather" in config and isinstance(config["fine_weather"], dict):
+            fine_weather = {k: float(v) for k, v in config["fine_weather"].items() if isinstance(v, (int, float))}
+        elif "generated_metadata" in config and isinstance(config["generated_metadata"], dict):
+            gen_fine = config["generated_metadata"].get("fine_weather")
+            if isinstance(gen_fine, dict):
+                fine_weather = {k: float(v) for k, v in gen_fine.items() if isinstance(v, (int, float))}
+
         self._info = ScenarioInfo(
             name=str(config.get("name", "unnamed_scenario")),
             description=str(config.get("description", "")),
             version=str(config.get("version", "1.0")),
             duration_seconds=float(config.get("duration_seconds", 60.0)),
-            weather_preset=str(config.get("weather", "ClearNoon")),
+            weather_preset=weather_preset,
+            fine_weather=fine_weather,
             map_name=config.get("map"),
             backend=self._backend,
         )
@@ -338,7 +357,12 @@ class ScenarioRunner:
                 "synchronous_mode": True,
                 "fixed_delta_seconds": 0.05,
             })())
-            self._client.set_weather(self._info.weather_preset)
+            if self._info.fine_weather:
+                weather_dict = dict(self._info.fine_weather)
+                weather_dict.setdefault("preset", self._info.weather_preset)
+                self._client.set_weather(weather_dict, preset_base=self._info.weather_preset)
+            else:
+                self._client.set_weather(self._info.weather_preset)
             # --- Ego + traffic ------------------------------------------------
             self._ego_bundle = self._actor_mgr.spawn_ego(self._cfg.get("ego_vehicle", {}))
             # Mark ego so kinematics can find it easily.
@@ -370,7 +394,13 @@ class ScenarioRunner:
                     self._client.load_map(self._info.map_name)
 
             self._client.set_synchronous_mode(True, fixed_delta_seconds=0.05)
-            self._client.set_weather_preset(self._info.weather_preset)
+            if hasattr(self._client, "set_weather"):
+                if self._info.fine_weather:
+                    self._client.set_weather(self._info.fine_weather, preset_base=self._info.weather_preset)
+                else:
+                    self._client.set_weather(self._info.weather_preset)
+            else:
+                self._client.set_weather_preset(self._info.weather_preset)
 
             # --- Ego + traffic ------------------------------------------------
             self._ego_bundle = self._actor_mgr.spawn_ego(self._cfg.get("ego_vehicle", {}))
@@ -418,7 +448,10 @@ class ScenarioRunner:
             print(f"  {info.description}")
         print(border)
         print(f"  Duration: {info.duration_seconds:.0f}s")
-        print(f"  Weather:  {info.weather_preset}")
+        weather_desc = info.weather_preset
+        if info.fine_weather:
+            weather_desc += f" (fine-grained: {info.fine_weather})"
+        print(f"  Weather:  {weather_desc}")
         print(f"  Map:      {info.map_name or '<current>'}")
         print(border)
         print()
