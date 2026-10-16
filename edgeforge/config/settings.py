@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     LOG_DIR: str = "logs"
     RUN_DIR: str = "runs"
+    HISTORY_DIR: str = "runs/history"
     METRICS_FORMAT: Literal["csv", "parquet"] = "csv"
 
     @field_validator("RISK_OBJECT_WEIGHTS")

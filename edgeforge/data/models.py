@@ -9,7 +9,7 @@ lane information, …) without touching the pipeline code.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Literal, Optional
 
@@ -115,9 +115,59 @@ class PerceptionFailureRecord(BaseModel):
     iou: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     severity: Literal["low", "medium", "high", "critical"]
     frame_id: Optional[int] = None
+    run_id: Optional[str] = None
     scenario_id: Optional[str] = None
     actor_id: Optional[int] = None
     message: str = ""
+
+
+class HistoricalRunRecord(BaseModel):
+    """Persisted metrics and context for one validation run."""
+
+    run_id: str
+    scenario_id: str
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    iou_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    frames_processed: int = Field(default=0, ge=0)
+    predictions: int = Field(default=0, ge=0)
+    ground_truth_objects: int = Field(default=0, ge=0)
+    true_positives: int = Field(default=0, ge=0)
+    false_positives: int = Field(default=0, ge=0)
+    missed_detections: int = Field(default=0, ge=0)
+    precision: float = Field(default=0.0, ge=0.0, le=1.0)
+    recall: float = Field(default=0.0, ge=0.0, le=1.0)
+    f1: float = Field(default=0.0, ge=0.0, le=1.0)
+    matched_iou: float = Field(default=0.0, ge=0.0, le=1.0)
+    scenario_conditions: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    failure_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    excluded_predictions: int = Field(default=0, ge=0)
+    excluded_ground_truth: int = Field(default=0, ge=0)
+
+    @property
+    def tp(self) -> int:
+        return self.true_positives
+
+    @property
+    def fp(self) -> int:
+        return self.false_positives
+
+    @property
+    def fn(self) -> int:
+        return self.missed_detections
+
+    @property
+    def false_negatives(self) -> int:
+        return self.missed_detections
+
+    @property
+    def matched_box_iou(self) -> float:
+        return self.matched_iou
+
+    @property
+    def mean_iou(self) -> float:
+        return self.matched_iou
 
 
 # ---------------------------------------------------------------------------
