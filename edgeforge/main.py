@@ -51,7 +51,7 @@ import numpy as np
 from edgeforge.analysis import RiskEngine
 from edgeforge.config import settings
 from edgeforge.data.models import DetectedObject, RiskLevel, VehicleState
-from edgeforge.perception import CameraProcessor, ObjectDetector
+from edgeforge.perception import CameraProcessor, ObjectDetector, PerceptionPipeline
 from edgeforge.utils import get_logger
 
 logger = get_logger(__name__)
@@ -300,6 +300,10 @@ def run_simulation(
         default_height=settings.CAMERA_HEIGHT,
     )
     detector = ObjectDetector()
+    perception_pipeline = PerceptionPipeline(
+        camera_processor=camera_proc,
+        detector=detector,
+    )
     risk_engine = RiskEngine()
 
     # Instantiate the runner directly (keeps access to backend-specific
@@ -333,7 +337,10 @@ def run_simulation(
                     rgb, width=settings.CAMERA_WIDTH, height=settings.CAMERA_HEIGHT
                 )
             # --- B) Run perception detections --------------------------------
-            real_dets = detector.detect(rgb)
+            real_dets = perception_pipeline.process_frame(
+                rgb,
+                timestamp=frame.timestamp,
+            )
             if USE_MOCK_GROUND_TRUTH_AS_DETECTOR and not real_dets:
                 # Scale ground-truth bboxes from the *mock-sensor resolution* up
                 # to the *post-resize resolution* used by the HUD.

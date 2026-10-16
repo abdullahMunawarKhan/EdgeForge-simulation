@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -93,6 +93,31 @@ class RiskAssessment(BaseModel):
     @classmethod
     def _clamp_score(cls, v: float) -> float:
         return max(0.0, min(1.0, v))
+
+
+class PerceptionFailureRecord(BaseModel):
+    """Structured validation failure associated with a prediction or actor."""
+
+    failure_type: Literal[
+        "missed_detection",
+        "false_positive",
+        "poor_localization",
+        "low_confidence",
+        "confidence_degradation",
+        "invalid_box",
+    ]
+    scenario_conditions: dict[str, Any] = Field(default_factory=dict)
+    object_class: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    baseline_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    predicted_bbox: Optional[List[float]] = None
+    ground_truth_bbox: Optional[List[float]] = None
+    iou: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    severity: Literal["low", "medium", "high", "critical"]
+    frame_id: Optional[int] = None
+    scenario_id: Optional[str] = None
+    actor_id: Optional[int] = None
+    message: str = ""
 
 
 # ---------------------------------------------------------------------------
