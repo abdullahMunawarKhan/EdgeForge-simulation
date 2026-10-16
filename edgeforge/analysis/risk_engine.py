@@ -77,7 +77,9 @@ class RiskEngine:
         # --- Distance component -------------------------------------------
         #  0 m  -> 1.0 (collision / immediate hazard)
         # 50 m+ -> 0.0 (too far to care about right now)
-        if obj.distance <= 0:
+        if obj.distance is None:
+            dist_factor = 0.0
+        elif obj.distance <= 0:
             dist_factor = 1.0
         else:
             dist_factor = max(0.0, 1.0 - obj.distance / 50.0)
@@ -87,7 +89,7 @@ class RiskEngine:
         #  -30 m/s (~108 km/h closing) -> 1.0
         #    0 m/s                   -> 0.0
         #  +ve (moving away)        -> 0.0
-        if obj.relative_speed >= 0:
+        if obj.relative_speed is None or obj.relative_speed >= 0:
             speed_factor = 0.0
         else:
             speed_factor = min(1.0, abs(obj.relative_speed) / 30.0)
@@ -150,9 +152,17 @@ class RiskEngine:
         for obj, h in hazards:
             if h >= self.LEVEL_MEDIUM:
                 contributing.append(obj.object_id)
+                distance_text = (
+                    f"{obj.distance:.1f}m" if obj.distance is not None else "unknown distance"
+                )
+                closing_speed_text = (
+                    f"{-obj.relative_speed:.1f}m/s"
+                    if obj.relative_speed is not None
+                    else "unknown closing speed"
+                )
                 reasons.append(
-                    f"{obj.object_type}@{obj.distance:.1f}m "
-                    f"(closing={-obj.relative_speed:.1f}m/s -> hazard {h:.2f})"
+                    f"{obj.object_type}@{distance_text} "
+                    f"(closing={closing_speed_text} -> hazard {h:.2f})"
                 )
 
         reasons = reasons[:3]  # keep the reason string concise
@@ -164,7 +174,16 @@ class RiskEngine:
 
         level = self._risk_level(overall_score)
 
-        if not reasons:
+        if not reasons and any(
+            obj.distance is None or obj.relative_speed is None
+            for obj in detected_objects
+        ):
+            reason_text = (
+                f"{len(detected_objects)} object(s) observed, but distance or "
+                "relative-speed measurements are unavailable; risk assessment "
+                "is incomplete."
+            )
+        elif not reasons:
             reason_text = (
                 f"{len(detected_objects)} object(s) observed but none are "
                 f"immediately hazardous (ego speed {ego_speed_kmh:.1f} km/h)."
