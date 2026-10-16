@@ -111,3 +111,39 @@ def test_managed_camera_suite_attaches_three_views_to_same_ego_and_cleans_up(
 
     sensors.cleanup()
     assert all(sensor.stop_calls == 1 for sensor in client.world.sensors)
+
+
+def test_camera_cleanup_continues_after_a_sensor_stop_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sensor_module,
+        "carla",
+        SimpleNamespace(
+            Location=lambda **values: values,
+            Rotation=lambda **values: values,
+            Transform=lambda location, rotation: (location, rotation),
+        ),
+    )
+    client = _Client()
+    sensors = SensorManager(client)
+    sensors.build_suite(
+        object(),
+        {"rgb_camera": {"enabled": True, "width": 6, "height": 4}},
+    )
+
+    def fail_stop() -> None:
+        raise RuntimeError("stop failed")
+
+    client.world.sensors[1].stop = fail_stop
+    logged_errors = []
+    monkeypatch.setattr(
+        sensor_module.logger,
+        "exception",
+        lambda message: logged_errors.append(message),
+    )
+
+    sensors.cleanup()
+
+    assert client.world.sensors[0].stop_calls == 1
+    assert client.world.sensors[2].stop_calls == 1
+    assert sensors._sensors == []
+    assert logged_errors == ["Could not stop a CARLA sensor during cleanup."]

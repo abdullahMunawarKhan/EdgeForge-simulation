@@ -1,7 +1,7 @@
 import random
 import carla
 
-HOST = "192.168.97.250"
+HOST = "192.168.96.91"
 PORT = 2000
 VEHICLE_COUNT = 12
 PEDESTRIAN_COUNT = 5

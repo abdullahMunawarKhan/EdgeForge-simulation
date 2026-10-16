@@ -198,6 +198,9 @@ class MockCarlaClient:
         self._tick_callbacks: List[Callable[[MockWorldSnapshot], None]] = []
         self._lock = threading.RLock()
         self._sensors_blueprints: Dict[str, Any] = {}
+        # Written each tick by _advance_mock_actors in scenario_runner so
+        # MockSensorManager can compute relative closing speeds for NPC detections.
+        self._ego_state_snapshot: Optional[Any] = None
 
     # ------------------------------------------------------------------ connection
     def connect(self) -> bool:

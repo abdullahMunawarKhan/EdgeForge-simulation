@@ -4,7 +4,7 @@
   "version": "1.0",
   "weather": "ClearNoon",
   "map": "Town03",
-  "duration_seconds": 60,
+  "duration_seconds": 0,
   "traffic": {
     "vehicles": 5,
     "pedestrians": 10,

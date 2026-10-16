@@ -293,6 +293,7 @@ def run_simulation(
     # required; mock mode does NOT import `carla` so this works even if
     # the CARLA wheel isn't installed.
     from edgeforge.simulation import ScenarioRunner, SensorFrame
+    from edgeforge.api import runtime, start_api_server
 
     # --- Build the pipeline once (reused every tick) ---------------------
     camera_proc = CameraProcessor(
@@ -310,6 +311,16 @@ def run_simulation(
     # helpers like latest_mock_ground_truth_detections that run_config
     # wouldn't expose to a plain on_frame callback).
     runner = ScenarioRunner.from_config(scenario_path, backend=backend)
+    api_server = start_api_server()
+    scenario_info = getattr(runner, "info", None)
+    scenario_conditions = {
+        "scenario_id": getattr(scenario_info, "name", None),
+        "scenario_name": getattr(scenario_info, "name", None),
+        "weather_preset": getattr(scenario_info, "weather_preset", None),
+        "map": getattr(scenario_info, "map_name", None),
+        "backend": runner.backend,
+    }
+    runtime.start(runner.backend, scenario_conditions)
 
     logger.success(
         f"Pipeline ready [backend={runner.backend}]: "
@@ -328,6 +339,8 @@ def run_simulation(
     def on_frame(frame: SensorFrame) -> None:
         nonlocal window_open, last_risk, last_detections
 
+        pipeline_detections: List[DetectedObject] | None = None
+        camera_frame: np.ndarray | None = None
         # --- A) RGB frame through CameraProcessor (validation + optional resize)
         if frame.rgb is not None and camera_proc.is_valid_frame(frame.rgb):
             rgb = frame.rgb
@@ -336,11 +349,13 @@ def run_simulation(
                 rgb = camera_proc.resize_frame(
                     rgb, width=settings.CAMERA_WIDTH, height=settings.CAMERA_HEIGHT
                 )
+            camera_frame = rgb
             # --- B) Run perception detections --------------------------------
             real_dets = perception_pipeline.process_frame(
                 rgb,
                 timestamp=frame.timestamp,
             )
+            pipeline_detections = real_dets
             if USE_MOCK_GROUND_TRUTH_AS_DETECTOR and not real_dets:
                 # Scale ground-truth bboxes from the *mock-sensor resolution* up
                 # to the *post-resize resolution* used by the HUD.
@@ -377,6 +392,27 @@ def run_simulation(
                     f"risk={last_risk.risk_score:.2f} {last_risk.risk_level.value}"
                 )
 
+        pipeline_status = perception_pipeline.get_status()
+        runtime.publish_frame(
+            backend=runner.backend,
+            frame_id=frame.frame_number,
+            timestamp=frame.timestamp,
+            detections=pipeline_detections,
+            scenario_conditions=scenario_conditions,
+            metrics={
+                "frames_processed": pipeline_status["frames_processed"],
+                "detection_count": (
+                    len(pipeline_detections)
+                    if pipeline_detections is not None
+                    else None
+                ),
+                "pipeline": pipeline_status,
+            },
+            risk_assessment=last_risk,
+            camera_frame=camera_frame if runner.backend == "carla" else None,
+            camera_frames=frame.camera_views if runner.backend == "carla" else None,
+        )
+
         # --- D) Hazard / lane events (log if fired) -----------------------
         for event in frame.collision_events:
             logger.critical(
@@ -407,6 +443,8 @@ def run_simulation(
     except KeyboardInterrupt:
         print("\n🛑 Simulation stopped by user.")
     finally:
+        runtime.stop()
+        api_server.should_exit = True
         try:
             cv2.destroyAllWindows()
         except Exception:
