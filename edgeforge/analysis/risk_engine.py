@@ -1,66 +1,47 @@
+
 """
-RiskEngine – turn perception output + ego state into a risk score.
+RiskEngine – convert perception output and ego state into an explainable
+driving-risk assessment.
 
-The goal of this starter implementation is to produce an **explainable,
-deterministic, rule-based** risk score between 0 and 1, along with a
-discrete RiskLevel bucket (LOW / MEDIUM / HIGH / CRITICAL) and a plain-
-text reason string.
-
-This is intentionally *not* ML yet, but the class is structured so you
-can swap in a learned model later without changing callers.
+The rule-based score is bounded between 0 and 1. It considers object
+distance, closing speed, object-type weights, time to collision (TTC),
+multiple hazards, and ego-vehicle speed.
 """
 
 from __future__ import annotations
 
-from typing import List
+import math
+from typing import List, Optional
 
 from edgeforge.config.settings import settings
-from edgeforge.data.models import DetectedObject, RiskAssessment, RiskLevel, VehicleState
+from edgeforge.data.models import (
+    DetectedObject,
+    RiskAssessment,
+    RiskLevel,
+    VehicleState,
+)
 from edgeforge.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class RiskEngine:
-    """Rule-based risk calculator for EdgeForge.
+    """Calculate explainable driving risk using deterministic rules."""
 
-    Risk-scoring logic (starter)
-    ----------------------------
-    For each detected object we compute a per-object hazard factor based
-    on two simple, monotonic heuristics:
-      * Smaller distance  -> higher risk.
-      * Faster closing speed (negative relative_speed) -> higher risk.
-
-    The overall risk score is the **maximum** per-object hazard (i.e. the
-    single most dangerous object dominates), clamped to [0, 1].  This
-    keeps the behaviour intuitive and the output easy to explain.
-
-    Risk-level thresholds
-    ---------------------
-      0.00 – 0.30   -> LOW
-      0.30 – 0.60   -> MEDIUM
-      0.60 – 0.85   -> HIGH
-      0.85 – 1.00   -> CRITICAL
-
-    TODO:
-      * Per-object-type weights (pedestrians > cyclists > cars).
-      * Lane-/heading-awareness (objects in the same lane are more dangerous).
-      * Time-to-collision (TTC) calculation from relative_speed.
-      * ML-based risk predictor trained on historical scenario data.
-      * Scenario-specific context (intersections, rain, night, …).
-    """
-
-    # Discrete risk-level thresholds.  Kept as class attributes so they
-    # are easy to tweak without hunting through the logic.
     LEVEL_MEDIUM: float = 0.30
-    LEVEL_HIGH: float = settings.RISK_THRESHOLD  # default 0.70 -> we bump to 0.60 below
-    LEVEL_CRITICAL: float = 0.85
+    LEVEL_HIGH: float = 0.60
+    LEVEL_CRITICAL: float = settings.RISK_THRESHOLD
 
-    def __init__(self) -> None:
-        # The default threshold from settings is 0.70, which sits between
-        # HIGH and CRITICAL.  Rebind HIGH so the banding is sensible.
-        self.LEVEL_HIGH = 0.60
-        self.LEVEL_CRITICAL = settings.RISK_THRESHOLD  # 0.70 by default
+    TTC_THRESHOLD_SECONDS: float = 3.0
+    TTC_EXPONENTIAL_SCALE: float = 3.0
+    MAX_RELEVANT_DISTANCE: float = 50.0
+    MAX_CLOSING_SPEED: float = 30.0
+    MAX_EGO_SPEED_KMH: float = 100.0
+    MAX_EGO_AMPLIFIER: float = 1.3
+
+    def __init__(self, use_ml: bool = False) -> None:
+        self.use_ml = use_ml
+
         logger.info(
             "RiskEngine initialized: thresholds "
             f"MEDIUM>={self.LEVEL_MEDIUM:.2f}, "
@@ -68,37 +49,80 @@ class RiskEngine:
             f"CRITICAL>={self.LEVEL_CRITICAL:.2f}"
         )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
     @staticmethod
-    def _per_object_hazard(obj: DetectedObject) -> float:
-        """Compute a single object's hazard in [0, 1]."""
-        # --- Distance component -------------------------------------------
-        #  0 m  -> 1.0 (collision / immediate hazard)
-        # 50 m+ -> 0.0 (too far to care about right now)
-        if obj.distance is None:
-            dist_factor = 0.0
-        elif obj.distance <= 0:
-            dist_factor = 1.0
-        else:
-            dist_factor = max(0.0, 1.0 - obj.distance / 50.0)
+    def _calculate_ttc(obj: DetectedObject) -> Optional[float]:
+        """
+        Calculate time to collision in seconds.
 
-        # --- Closing-speed component --------------------------------------
-        # relative_speed: negative means the object is approaching.
-        #  -30 m/s (~108 km/h closing) -> 1.0
-        #    0 m/s                   -> 0.0
-        #  +ve (moving away)        -> 0.0
+        Negative relative_speed means the object is approaching.
+        TTC is unavailable when distance or closing speed is unknown,
+        or when the object is not approaching.
+        """
+        if obj.distance is None or obj.relative_speed is None:
+            return None
+
+        if obj.distance <= 0:
+            return 0.0
+
+        if obj.relative_speed >= 0:
+            return None
+
+        return obj.distance / max(0.001, -obj.relative_speed)
+
+    def _per_object_hazard(self, obj: DetectedObject) -> float:
+        """Return one object's hazard score, bounded between 0 and 1."""
+
+        # Nearer objects receive a higher distance factor.
+        if obj.distance is None:
+            distance_factor = 0.0
+        elif obj.distance <= 0:
+            distance_factor = 1.0
+        else:
+            distance_factor = max(
+                0.0,
+                1.0 - obj.distance / self.MAX_RELEVANT_DISTANCE,
+            )
+
+        # Negative relative speed indicates an approaching object.
         if obj.relative_speed is None or obj.relative_speed >= 0:
             speed_factor = 0.0
         else:
-            speed_factor = min(1.0, abs(obj.relative_speed) / 30.0)
+            speed_factor = min(
+                1.0,
+                -obj.relative_speed / self.MAX_CLOSING_SPEED,
+            )
 
-        # Simple weighted combination; distance dominates a bit.
-        hazard = 0.65 * dist_factor + 0.35 * speed_factor
+        # Preserve the baseline distance/closing-speed calculation.
+        base_hazard = (
+            0.65 * distance_factor
+            + 0.35 * speed_factor
+        )
+
+        # Apply the configured importance of each object type.
+        object_type = obj.object_type.strip().lower()
+        object_weight = settings.RISK_OBJECT_WEIGHTS.get(
+            object_type, 1.0
+        )
+        hazard = base_hazard * object_weight
+
+        # Exponentially increase hazard when TTC is below 3 seconds.
+        ttc = self._calculate_ttc(obj)
+
+        if ttc is not None and ttc < self.TTC_THRESHOLD_SECONDS:
+            ttc_multiplier = math.exp(
+                (self.TTC_THRESHOLD_SECONDS - ttc)
+                / self.TTC_EXPONENTIAL_SCALE
+            )
+            hazard *= ttc_multiplier
+
+        # A negative or zero distance indicates an immediate hazard.
+        if obj.distance is not None and obj.distance <= 0:
+            hazard = 1.0
+
         return max(0.0, min(1.0, hazard))
 
     def _risk_level(self, score: float) -> RiskLevel:
+        """Map a numeric risk score to its existing risk category."""
         if score >= self.LEVEL_CRITICAL:
             return RiskLevel.CRITICAL
         if score >= self.LEVEL_HIGH:
@@ -107,96 +131,122 @@ class RiskEngine:
             return RiskLevel.MEDIUM
         return RiskLevel.LOW
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _calculate_risk_ml(
+        self,
+        detected_objects: List[DetectedObject],
+        vehicle_state: VehicleState,
+    ) -> Optional[float]:
+        """
+        Placeholder for a future trained risk-prediction model.
+
+        No ML model is connected yet. Returning None allows the
+        deterministic rule-based calculation to remain the fallback.
+        """
+        return None
+
     def calculate_risk(
         self,
         detected_objects: List[DetectedObject],
         vehicle_state: VehicleState,
     ) -> RiskAssessment:
-        """Assess overall driving risk given the current scene.
+        """Assess risk and return the project's existing output model."""
 
-        Parameters
-        ----------
-        detected_objects :
-            Objects currently observed by the perception stack.
-        vehicle_state :
-            Kinematic state of the ego vehicle.
-
-        Returns
-        -------
-        RiskAssessment
-            risk_score in [0,1], a discrete RiskLevel, a textual reason,
-            and the ids of objects that contributed meaningfully.
-        """
         if not detected_objects:
-            logger.debug("No objects detected -> risk=0 (LOW, baseline)")
             return RiskAssessment(
                 risk_score=0.0,
                 risk_level=RiskLevel.LOW,
-                reason="No objects detected around the ego vehicle. Safe baseline.",
+                reason="No objects detected around the ego vehicle.",
+                contributing_objects=[],
             )
 
-        # ---- Compute per-object hazards ---------------------------------
+        # Calculate each object's hazard independently.
         hazards = [
-            (obj, self._per_object_hazard(obj)) for obj in detected_objects
+            (obj, self._per_object_hazard(obj))
+            for obj in detected_objects
         ]
 
-        # ---- Overall score = worst single object ------------------------
-        overall_score = max(h for _, h in hazards)
+        # Combine hazards from all objects rather than using only the
+        # single largest hazard. Keep the aggregate bounded.
+        combined_hazard = min(
+            1.0,
+            sum(hazard for _, hazard in hazards),
+        )
 
-        # ---- Build an explainable reason --------------------------------
-        contributing: List[str] = []
-        reasons: List[str] = []
-        for obj, h in hazards:
-            if h >= self.LEVEL_MEDIUM:
-                contributing.append(obj.object_id)
-                distance_text = (
-                    f"{obj.distance:.1f}m" if obj.distance is not None else "unknown distance"
-                )
-                closing_speed_text = (
-                    f"{-obj.relative_speed:.1f}m/s"
-                    if obj.relative_speed is not None
-                    else "unknown closing speed"
-                )
-                reasons.append(
-                    f"{obj.object_type}@{distance_text} "
-                    f"(closing={closing_speed_text} -> hazard {h:.2f})"
-                )
+        # Ego speed is measured in metres per second in VehicleState.
+        ego_speed_kmh = max(0.0, vehicle_state.speed * 3.6)
+        speed_fraction = min(
+            ego_speed_kmh / self.MAX_EGO_SPEED_KMH,
+            1.0,
+        )
+        ego_amplifier = (
+            1.0
+            + (self.MAX_EGO_AMPLIFIER - 1.0) * speed_fraction
+        )
 
-        reasons = reasons[:3]  # keep the reason string concise
-
-        # Ego context contribution: high ego speed slightly amplifies risk.
-        ego_speed_kmh = vehicle_state.speed * 3.6
-        ego_amplifier = 1.0 + min(0.2, ego_speed_kmh / 500.0)
-        overall_score = min(1.0, overall_score * ego_amplifier)
-
+        overall_score = min(1.0, combined_hazard * ego_amplifier)
         level = self._risk_level(overall_score)
 
-        if not reasons and any(
-            obj.distance is None or obj.relative_speed is None
-            for obj in detected_objects
-        ):
-            reason_text = (
-                f"{len(detected_objects)} object(s) observed, but distance or "
-                "relative-speed measurements are unavailable; risk assessment "
-                "is incomplete."
+        contributing: List[str] = []
+        reasons: List[str] = []
+
+        for obj, hazard in hazards:
+            if hazard < self.LEVEL_MEDIUM:
+                continue
+
+            contributing.append(obj.object_id)
+
+            distance_text = (
+                f"{obj.distance:.1f} m"
+                if obj.distance is not None
+                else "unknown distance"
             )
-        elif not reasons:
-            reason_text = (
-                f"{len(detected_objects)} object(s) observed but none are "
-                f"immediately hazardous (ego speed {ego_speed_kmh:.1f} km/h)."
+
+            if obj.relative_speed is None:
+                speed_text = "unknown relative speed"
+            elif obj.relative_speed < 0:
+                speed_text = f"closing at {-obj.relative_speed:.1f} m/s"
+            elif obj.relative_speed > 0:
+                speed_text = f"moving away at {obj.relative_speed:.1f} m/s"
+            else:
+                speed_text = "no relative movement"
+
+            ttc = self._calculate_ttc(obj)
+            ttc_text = (
+                f", TTC={ttc:.2f} s"
+                if ttc is not None
+                else ", TTC unavailable"
             )
+
+            reasons.append(
+                f"{obj.object_type}@{distance_text} "
+                f"({speed_text}{ttc_text}, hazard={hazard:.2f})"
+            )
+
+        # Keep the explanation concise while retaining all contributors.
+        displayed_reasons = reasons[:3]
+
+        if displayed_reasons:
+            reason_text = (
+                f"{level.name} risk: "
+                + "; ".join(displayed_reasons)
+                + f". Ego speed={ego_speed_kmh:.1f} km/h; "
+                f"speed multiplier={ego_amplifier:.2f}."
+            )
+            if len(reasons) > 3:
+                reason_text += (
+                    f" {len(reasons) - 3} additional contributing "
+                    "object(s) omitted from the explanation."
+                )
         else:
             reason_text = (
-                f"{level.name} risk: " + "; ".join(reasons) +
-                f" (ego speed {ego_speed_kmh:.1f} km/h)."
+                f"{level.name} risk: no individual object reached "
+                f"the {self.LEVEL_MEDIUM:.2f} contribution threshold. "
+                f"Ego speed={ego_speed_kmh:.1f} km/h."
             )
 
         logger.debug(
-            f"RiskEngine: score={overall_score:.3f} level={level.name} "
-            f"objects={len(detected_objects)}"
+            f"RiskEngine: score={overall_score:.3f}, "
+            f"level={level.name}, objects={len(detected_objects)}"
         )
 
         return RiskAssessment(
