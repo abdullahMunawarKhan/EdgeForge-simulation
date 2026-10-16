@@ -1,0 +1,31 @@
+{
+  "name": "nosensor_renderless",
+  "description": "ZERO sensor spawns, 0 traffic, 15s. For validating CARLA connection + actor manager + VehicleState pipeline on low-VRAM machines before enabling RGB.",
+  "version": "1.0",
+  "weather": "ClearNoon",
+  "map": "Town01",
+  "duration_seconds": 15,
+  "traffic": {
+    "vehicles": 0,
+    "pedestrians": 0,
+    "bicycles": 0
+  },
+  "ego_vehicle": {
+    "model": "vehicle.toyota.prius",
+    "spawn_point_index": 0,
+    "speed_limit": 30,
+    "autopilot": true
+  },
+  "sensors": {
+    "rgb_camera":   { "enabled": false },
+    "lidar":        { "enabled": false },
+    "imu":          { "enabled": false },
+    "gnss":         { "enabled": false },
+    "collision":    { "enabled": false },
+    "lane_invasion":{ "enabled": false }
+  },
+  "risk_analysis": {
+    "enabled": true,
+    "threshold": 0.7
+  }
+}
