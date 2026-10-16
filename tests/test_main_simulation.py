@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from edgeforge import main as edgeforge_main
+from edgeforge.api import runtime
 from edgeforge.analysis import RiskEngine
 from edgeforge.data.models import DetectedObject, RiskAssessment, VehicleState
 from edgeforge.perception import RawDetection
@@ -15,6 +16,9 @@ from edgeforge.simulation import SensorFrame
 def test_live_simulation_passes_estimated_objects_to_risk_engine(monkeypatch) -> None:
     class StubDetector:
         calls = 0
+
+        def get_status(self) -> dict[str, Any]:
+            return {"model": "test"}
 
         def detect(self, frame: np.ndarray) -> list[RawDetection]:
             assert frame.shape == (
@@ -80,6 +84,18 @@ def test_live_simulation_passes_estimated_objects_to_risk_engine(monkeypatch) ->
         "edgeforge.simulation.ScenarioRunner",
         StubScenarioRunner,
     )
+    monkeypatch.setattr(
+        "edgeforge.api.start_api_server",
+        lambda: type("StubServer", (), {"should_exit": False})(),
+    )
+    published_frames: list[dict[str, Any]] = []
+    original_publish_frame = runtime.publish_frame
+
+    def record_published_frame(**frame: Any) -> None:
+        published_frames.append(frame)
+        original_publish_frame(**frame)
+
+    monkeypatch.setattr(runtime, "publish_frame", record_published_frame)
 
     assert edgeforge_main.run_simulation(
         scenario_path="unused.json",
@@ -106,3 +122,7 @@ def test_live_simulation_passes_estimated_objects_to_risk_engine(monkeypatch) ->
         and 0.0 <= assessment.risk_score <= 1.0
         for assessment in observed["assessments"]
     )
+    assert len(published_frames) == 2
+    assert published_frames[-1]["frame_id"] == 2
+    assert published_frames[-1]["detections"][0].object_type == "car"
+    assert published_frames[-1]["metrics"]["detection_count"] == 1

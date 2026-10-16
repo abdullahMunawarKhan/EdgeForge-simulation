@@ -5,13 +5,17 @@ from edgeforge.perception.distance_estimator import DistanceEstimate, DistanceEs
 from edgeforge.perception.pipeline import PerceptionPipeline
 from edgeforge.perception.tracker import ObjectTracker, TrackedDetection, compute_iou
 from edgeforge.perception.validation import (
+    SUPPORTED_EVALUATION_CLASSES,
     DetectionMatch,
     FailureSeverityRules,
     GroundTruthObject,
+    RunValidationMetrics,
     ValidationMetrics,
+    aggregate_run_metrics,
     carla_actor_class,
     evaluate_detections,
     export_failure_report,
+    export_run_report,
     extract_carla_ground_truth,
     project_carla_actor_bbox,
 )
@@ -29,13 +33,17 @@ __all__ = [
     "DistanceEstimate",
     "PerceptionPipeline",
     "PerceptionFailureRecord",
+    "SUPPORTED_EVALUATION_CLASSES",
     "DetectionMatch",
     "FailureSeverityRules",
     "GroundTruthObject",
+    "RunValidationMetrics",
     "ValidationMetrics",
+    "aggregate_run_metrics",
     "carla_actor_class",
     "evaluate_detections",
     "export_failure_report",
+    "export_run_report",
     "extract_carla_ground_truth",
     "project_carla_actor_bbox",
 ]

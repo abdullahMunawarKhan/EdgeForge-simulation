@@ -66,6 +66,74 @@ python main.py demo
 python main.py run scenarios/configs/default_scenario.json
 ```
 
+## Live Dashboard API
+
+The read-only FastAPI service starts in the same process as its frame producer
+so endpoints can share the real pipeline state. Choose one CARLA producer. To
+run the managed scenario pipeline from the repository root:
+
+```powershell
+$env:API_HOST = "127.0.0.1"
+$env:API_PORT = "8000"
+python -m edgeforge.main --sim --backend carla --headless
+```
+
+Set `VITE_EDGEFORGE_API_URL=http://127.0.0.1:8000` in
+`frontend/.env.local`, then start the frontend. The backend defaults to
+`127.0.0.1:8000`; to access it from another computer, set `API_HOST=0.0.0.0`,
+allow the port through the backend computer's firewall, and configure
+`EDGEFORGE_CORS_ORIGINS` with the dashboard's exact origin. Configure the
+frontend URL with the backend computer's LAN address, not the CARLA address.
+
+To use the standalone YOLO camera test as the dashboard's Front-camera
+producer instead, stop the managed simulation and any separate API process,
+then run this from the repository root:
+
+```powershell
+python -m edgeforge.perception.yolo_camera_test
+```
+
+The script starts the API on the configured `API_HOST`/`API_PORT` and publishes
+its real Front frames and YOLO detections to that in-process API. Run only one
+copy of the script; it spawns its own CARLA vehicle and cameras. Do not run it
+at the same time as the managed scenario runner, which also owns CARLA actors
+and the API port.
+
+Implemented endpoints:
+
+- `GET /api/v1/simulation/status`
+- `GET /api/v1/simulation/snapshot`
+- `WS /api/v1/simulation/ws`
+- `GET /api/v1/simulation/reports/latest`
+- `GET /api/v1/simulation/camera/status`
+- `GET /api/v1/simulation/camera/front/stream` (MJPEG)
+- `GET /api/v1/simulation/camera/right_side/stream` (MJPEG)
+- `GET /api/v1/simulation/camera/top_down/stream` (MJPEG)
+
+When no simulation is publishing, status is `disconnected` and live fields are
+unavailable; no sample data is returned. The snapshot includes measured pipeline
+frame/detection counts and pipeline status, not validation precision/recall unless
+those values are present in the saved validation report. The latest report is
+read from `runs/phase4-live-validation.json`; generate it with
+`python -m edgeforge.simulation.validate_carla_perception` while CARLA is
+available. Simulation start/stop and configuration endpoints are not implemented.
+
+Do not run a separate `uvicorn edgeforge.api:app` process for live simulation
+data: a separately launched process has no access to its producer's in-memory
+pipeline and will correctly report disconnected.
+
+The managed `ScenarioRunner` attaches front, right-side, and top-down RGB
+sensors to its existing ego vehicle. Camera images are published only when
+captured on the same simulator frame. The top-down mount is 20 metres above the
+ego with pitch `-90°`. The front view uses detections from the existing
+`PerceptionPipeline` and is annotated on a bounded background encoder queue;
+the side and top-down views are live RGB feeds without YOLO boxes, since those
+boxes are produced from the front-camera pipeline. The old
+`/api/v1/simulation/camera/stream` route remains a front-view alias. The
+standalone `edgeforge.perception.yolo_camera_test` script also publishes its
+Front frames and detections to an API it starts in the same process; use it
+instead of, not alongside, the managed simulation.
+
 ---
 
 ## 🐍 Running Tests

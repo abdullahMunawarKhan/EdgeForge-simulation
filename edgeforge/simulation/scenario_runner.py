@@ -26,7 +26,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import numpy as np
 
@@ -82,6 +82,7 @@ class ScenarioInfo:
     weather_preset: str
     map_name: Optional[str]
     backend: str = BACKEND_CARLA
+    fine_weather: Optional[Dict[str, float]] = None
 
 
 def _parse_backend(cfg: Dict[str, Any], override: Optional[str]) -> str:
@@ -133,7 +134,7 @@ def _advance_mock_actors(client: MockCarlaClient, dt: float) -> None:
             desired_kmh = max(desired_kmh, 30.0)
         target_ms = desired_kmh / 3.6
 
-        accel_target = (target_ms - st.speed_kmh / 3.6) / max(0.3, 2.0)
+        accel_target = (target_ms - st.speed_kmh / 3.6) / max(dt, 0.3)
         accel_target = max(-3.0, min(3.0, accel_target))
         st.ax = accel_target
         st.ay = 0.0
@@ -189,7 +190,9 @@ def _advance_mock_actors(client: MockCarlaClient, dt: float) -> None:
     ego_state = None
     if ego_candidate is not None:
         ego_state = ego_candidate.state
-    client._ego_state_snapshot = ego_state  # noqa: SLF001
+    # Use setattr so static analysers don't flag a missing attribute on MockCarlaClient
+    # (the attribute is declared in MockCarlaClient.__init__ for safety).
+    setattr(client, "_ego_state_snapshot", ego_state)  # noqa: SLF001
 
 
 class ScenarioRunner:
@@ -232,12 +235,30 @@ class ScenarioRunner:
         else:
             self._backend = backend_cfg
 
+        # Parse weather: preserve both preset and fine-grained continuous values
+        weather_raw = config.get("weather", "ClearNoon")
+        fine_weather: Optional[Dict[str, float]] = None
+        if isinstance(weather_raw, dict):
+            fine_weather = {k: float(v) for k, v in weather_raw.items() if isinstance(v, (int, float))}
+            weather_preset = str(weather_raw.get("preset", "ClearNoon"))
+        else:
+            weather_preset = str(weather_raw)
+
+        # Check for fine_weather in root or generated_metadata
+        if "fine_weather" in config and isinstance(config["fine_weather"], dict):
+            fine_weather = {k: float(v) for k, v in config["fine_weather"].items() if isinstance(v, (int, float))}
+        elif "generated_metadata" in config and isinstance(config["generated_metadata"], dict):
+            gen_fine = config["generated_metadata"].get("fine_weather")
+            if isinstance(gen_fine, dict):
+                fine_weather = {k: float(v) for k, v in gen_fine.items() if isinstance(v, (int, float))}
+
         self._info = ScenarioInfo(
             name=str(config.get("name", "unnamed_scenario")),
             description=str(config.get("description", "")),
             version=str(config.get("version", "1.0")),
             duration_seconds=float(config.get("duration_seconds", 60.0)),
-            weather_preset=str(config.get("weather", "ClearNoon")),
+            weather_preset=weather_preset,
+            fine_weather=fine_weather,
             map_name=config.get("map"),
             backend=self._backend,
         )
@@ -338,7 +359,15 @@ class ScenarioRunner:
                 "synchronous_mode": True,
                 "fixed_delta_seconds": 0.05,
             })())
-            self._client.set_weather(self._info.weather_preset)
+            if self._info.fine_weather:
+                # Pass fine-grained values as-is; preset_base provides the
+                # base palette without polluting the Dict[str, float] with a str.
+                self._client.set_weather(
+                    dict(self._info.fine_weather),
+                    preset_base=self._info.weather_preset,
+                )
+            else:
+                self._client.set_weather(self._info.weather_preset)
             # --- Ego + traffic ------------------------------------------------
             self._ego_bundle = self._actor_mgr.spawn_ego(self._cfg.get("ego_vehicle", {}))
             # Mark ego so kinematics can find it easily.
@@ -353,14 +382,15 @@ class ScenarioRunner:
             for _ in range(_SPAWN_WARMUP_TICKS):
                 _advance_mock_actors(self._client, 0.05)
                 self._client.tick()
+                _warmup_snap = self._client.get_snapshot()
                 npc_list = [
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != self._ego_bundle.vehicle.id and "vehicle" in a.type_id
                 ]
                 self._sensor_mgr.update_for_tick(
-                    frame_number=self._client._frame,  # noqa: SLF001
-                    sim_time_s=self._client._elapsed_s,  # noqa: SLF001
-                    actors=npc_list,
+                    _warmup_snap.frame,
+                    _warmup_snap.timestamp.elapsed_seconds,
+                    npc_list,
                 )
         else:
             self._client.connect()
@@ -370,7 +400,13 @@ class ScenarioRunner:
                     self._client.load_map(self._info.map_name)
 
             self._client.set_synchronous_mode(True, fixed_delta_seconds=0.05)
-            self._client.set_weather_preset(self._info.weather_preset)
+            if hasattr(self._client, "set_weather"):
+                if self._info.fine_weather:
+                    self._client.set_weather(self._info.fine_weather, preset_base=self._info.weather_preset)
+                else:
+                    self._client.set_weather(self._info.weather_preset)
+            else:
+                self._client.set_weather_preset(self._info.weather_preset)
 
             # --- Ego + traffic ------------------------------------------------
             self._ego_bundle = self._actor_mgr.spawn_ego(self._cfg.get("ego_vehicle", {}))
@@ -418,7 +454,10 @@ class ScenarioRunner:
             print(f"  {info.description}")
         print(border)
         print(f"  Duration: {info.duration_seconds:.0f}s")
-        print(f"  Weather:  {info.weather_preset}")
+        weather_desc = info.weather_preset
+        if info.fine_weather:
+            weather_desc += f" (fine-grained: {info.fine_weather})"
+        print(f"  Weather:  {weather_desc}")
         print(f"  Map:      {info.map_name or '<current>'}")
         print(border)
         print()
@@ -456,9 +495,9 @@ class ScenarioRunner:
                 # 3) Push sensor frame generation
                 _advance_mock_actors(self._client, 0.05)
                 self._client.tick()  # frame++, elapsed_s += dt
-                snap = self._client.get_snapshot()
-                frame_number = snap.frame
-                timestamp_s = snap.timestamp.elapsed_seconds
+                _snap = self._client.get_snapshot()
+                frame_number = _snap.frame
+                timestamp_s = float(_snap.timestamp.elapsed_seconds)
                 npc_list = [
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != ego.id and "vehicle" in a.type_id
@@ -473,7 +512,7 @@ class ScenarioRunner:
                 start_sim_time = timestamp_s
 
             elapsed_sim = timestamp_s - start_sim_time
-            if elapsed_sim >= duration:
+            if duration > 0 and elapsed_sim >= duration:
                 logger.info(f"⌛ Scenario duration reached ({duration:.0f}s sim time).")
                 break
 
@@ -490,6 +529,7 @@ class ScenarioRunner:
                 vehicle_state=vs,
                 collision_events=collisions,
                 lane_invasions=lane_inv,
+                camera_views=self._sensor_mgr.get_synchronized_rgb_views(frame_number),
             )
 
             # Rough wall-clock throttling (UX only – determinism doesn't depend on this).

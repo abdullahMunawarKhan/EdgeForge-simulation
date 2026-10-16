@@ -24,10 +24,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from edgeforge.config import settings
 from edgeforge.data.models import PerceptionFailureRecord
 from edgeforge.perception import (
+    SUPPORTED_EVALUATION_CLASSES,
     FailureSeverityRules,
     ObjectDetector,
+    ValidationMetrics,
+    aggregate_run_metrics,
     evaluate_detections,
     export_failure_report,
+    export_run_report,
     extract_carla_ground_truth,
 )
 
@@ -82,8 +86,10 @@ def run_live_validation(
     target_count: int = 2,
     fixed_delta_seconds: float = 0.05,
     scenario_id: str = "phase4-live-validation",
+    run_id: str | None = None,
     baseline_confidence: Mapping[str, float] | None = None,
     severity_rules: FailureSeverityRules | None = None,
+    evaluation_classes: Sequence[str] | set[str] | None = None,
 ) -> dict[str, Any]:
     """Connect to CARLA, spawn a controlled scene, and aggregate frame metrics."""
     import carla
@@ -204,10 +210,21 @@ def run_live_validation(
             )
             if hasattr(weather, name)
         }
+        lighting_conditions = {
+            "sun_azimuth_angle": weather_conditions.get("sun_azimuth_angle", 0.0),
+            "sun_altitude_angle": weather_conditions.get("sun_altitude_angle", 0.0),
+        }
         scenario_conditions = {
             "map": map_name,
             "weather": weather_conditions,
+            "lighting": lighting_conditions,
             "fixed_delta_seconds": fixed_delta_seconds,
+            "actor_configuration": {
+                "ego_spawn_index": selected_ego_index,
+                "ego_actor_id": int(ego.id),
+                "target_vehicles": targets,
+                "target_count": len(targets),
+            },
             "camera": {
                 "width": settings.CAMERA_WIDTH,
                 "height": settings.CAMERA_HEIGHT,
@@ -222,9 +239,7 @@ def run_live_validation(
         controlled_actor_ids = {target["actor_id"] for target in targets}
         stale_frames = 0
         processed_frames = 0
-        total_true_positives = 0
-        total_false_positives = 0
-        total_missed_detections = 0
+        validation_metrics_seq: list[ValidationMetrics] = []
 
         while processed_frames < frame_count:
             expected_frame = int(world.tick())
@@ -268,16 +283,15 @@ def run_live_validation(
                 predictions,
                 ground_truth,
                 iou_threshold=iou_threshold,
+                evaluation_classes=evaluation_classes,
                 scenario_conditions=scenario_conditions,
                 frame_id=expected_frame,
                 scenario_id=scenario_id,
+                run_id=run_id,
                 baseline_confidence=baseline_confidence,
                 severity_rules=active_severity_rules,
             )
-            failure_records.extend(metrics.failure_records)
-            total_true_positives += metrics.true_positives
-            total_false_positives += metrics.false_positives
-            total_missed_detections += metrics.missed_detections
+            validation_metrics_seq.append(metrics)
             frame_metrics.append(
                 {
                     "frame": expected_frame,
@@ -302,6 +316,7 @@ def run_live_validation(
                     "true_positives": metrics.true_positives,
                     "false_positives": metrics.false_positives,
                     "missed_detections": metrics.missed_detections,
+                    "matched_iou": metrics.matched_iou,
                     "failures": [
                         failure.model_dump(mode="json")
                         for failure in metrics.failure_records
@@ -331,31 +346,33 @@ def run_live_validation(
             finally:
                 world.apply_settings(original_world_settings)
 
-    total_predictions = total_true_positives + total_false_positives
-    total_ground_truth = total_true_positives + total_missed_detections
-    precision = (
-        total_true_positives / total_predictions if total_predictions else 0.0
+    run_metrics = aggregate_run_metrics(
+        validation_metrics_seq,
+        scenario_id=scenario_id,
+        run_id=run_id,
+        scenario_conditions=scenario_conditions,
+        iou_threshold=iou_threshold,
     )
-    recall = (
-        total_true_positives / total_ground_truth if total_ground_truth else 0.0
-    )
-    f1 = (
-        2.0 * precision * recall / (precision + recall)
-        if precision + recall
-        else 0.0
-    )
+    metrics_summary = run_metrics.to_dict()
+    metrics_summary["frames_requested"] = frame_count
+    metrics_summary["frames_processed"] = processed_frames
+    metrics_summary["stale_camera_frames_discarded"] = stale_frames
 
     return {
         "status": "completed",
         "server": {"host": settings.CARLA_HOST, "port": settings.CARLA_PORT},
         "map": map_name,
+        "run_id": run_id,
         "scenario": {
             "scenario_id": scenario_id,
+            "run_id": run_id,
             "ego_spawn_index": selected_ego_index,
             "ego_actor_id": int(ego.id),
             "target_vehicles": targets,
+            "target_count": len(targets),
             "fixed_delta_seconds": fixed_delta_seconds,
             "weather": weather_conditions,
+            "lighting": lighting_conditions,
             "camera": {
                 "width": settings.CAMERA_WIDTH,
                 "height": settings.CAMERA_HEIGHT,
@@ -375,24 +392,9 @@ def run_live_validation(
             "severity_by_type": dict(active_severity_rules.severity_by_type or {}),
             "baseline_confidence": dict(baseline_confidence or {}),
         },
-        "metrics": {
-            "iou_threshold": iou_threshold,
-            "frames_requested": frame_count,
-            "frames_processed": processed_frames,
-            "stale_camera_frames_discarded": stale_frames,
-            "predictions": total_predictions,
-            "ground_truth_objects": total_ground_truth,
-            "true_positives": total_true_positives,
-            "false_positives": total_false_positives,
-            "missed_detections": total_missed_detections,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "aggregation": "micro-averaged counts across processed frames",
-            "zero_denominator_convention": "metric is 0.0",
-        },
+        "metrics": metrics_summary,
         "failures": [
-            failure.model_dump(mode="json") for failure in failure_records
+            failure.model_dump(mode="json") for failure in run_metrics.failures
         ],
         "frames": frame_metrics,
     }
@@ -411,6 +413,7 @@ def main() -> int:
     parser.add_argument("--targets", type=_positive_int, default=2)
     parser.add_argument("--fixed-delta", type=_positive_float, default=0.05)
     parser.add_argument("--scenario-id", default="phase4-live-validation")
+    parser.add_argument("--run-id", default=None, help="Optional run identifier.")
     parser.add_argument(
         "--low-confidence-threshold",
         type=float,
@@ -434,6 +437,12 @@ def main() -> int:
         help="Override a failure severity, e.g. missed_detection=critical.",
     )
     parser.add_argument(
+        "--eval-classes",
+        nargs="+",
+        default=None,
+        help="Optional object classes to evaluate (e.g. --eval-classes car pedestrian).",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=PROJECT_ROOT / settings.RUN_DIR / "phase4-live-validation.json",
@@ -449,6 +458,17 @@ def main() -> int:
         "--failure-format",
         choices=("json", "jsonl"),
         help="Failure export format; defaults from the output file extension.",
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="Disable automatic persistence to the historical run store.",
+    )
+    parser.add_argument(
+        "--history-dir",
+        type=Path,
+        default=None,
+        help="Custom historical store directory.",
     )
     args = parser.parse_args()
 
@@ -508,25 +528,33 @@ def main() -> int:
         target_count=args.targets,
         fixed_delta_seconds=args.fixed_delta,
         scenario_id=args.scenario_id,
+        run_id=args.run_id,
         baseline_confidence=baseline_confidence,
         severity_rules=severity_rules,
+        evaluation_classes=args.eval_classes,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    export_failure_report(
-        [
-            PerceptionFailureRecord.model_validate(failure)
-            for failure in report["failures"]
-        ],
-        args.failures_output,
-        format=args.failure_format,
+    export_run_report(
+        report,
+        args.output,
+        failures_destination=args.failures_output,
+        failure_format=args.failure_format,
     )
     print(json.dumps(report["metrics"], indent=2, sort_keys=True))
     print(f"Saved validation report to {args.output}")
     print(f"Saved failure records to {args.failures_output}")
+
+    if not args.no_history:
+        from edgeforge.data.history import get_history_store
+
+        store = get_history_store(args.history_dir)
+        saved_record = store.save_run(
+            report,
+            failures=report.get("failures"),
+            run_id=report.get("run_id"),
+            scenario_id=args.scenario_id,
+        )
+        print(f"Saved run '{saved_record.run_id}' to historical store ({store.root})")
+
     return 0
 
 
