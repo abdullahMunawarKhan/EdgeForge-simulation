@@ -316,15 +316,16 @@ class SimulationService:
                     camera_frame = None
                     source_size: tuple[int, int] | None = None
                     target_size: tuple[int, int] | None = None
-                    ground_truth = getattr(
-                        runner,
-                        "latest_ground_truth_objects",
-                        None,
-                    )
-                    if ground_truth is None:
+                    if runner.backend == "mock":
                         ground_truth = getattr(
                             runner,
                             "latest_mock_ground_truth_detections",
+                            [],
+                        )
+                    else:
+                        ground_truth = getattr(
+                            runner,
+                            "latest_ground_truth_objects",
                             [],
                         )
 

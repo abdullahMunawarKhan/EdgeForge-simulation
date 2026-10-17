@@ -121,6 +121,7 @@ class TestingStrategyBenchmark:
         seed: int = 42,
         backend: str = BACKEND_MOCK,
         output_dir: Optional[Path] = None,
+        detector: Optional[Any] = None,
     ) -> None:
         if scenario_budget <= 0:
             raise ValueError("scenario_budget must be a positive integer.")
@@ -135,6 +136,7 @@ class TestingStrategyBenchmark:
         self.backend = backend
         self.output_dir = Path(output_dir or PROJECT_ROOT / "runs" / "benchmarks" / f"bmk_{seed}_{backend}")
         self.benchmark_id = f"bmk_{seed}_{uuid_token()}"
+        self.detector = detector
 
     def run_dry_run(self) -> dict[str, Any]:
         """Perform dry-run validation for both strategies without simulation execution."""
@@ -199,6 +201,12 @@ class TestingStrategyBenchmark:
         logger.info(f"  Seed:           {self.seed}")
         logger.info("=" * 70)
 
+        if self.backend == BACKEND_CARLA and (self.detector is None or not hasattr(self.detector, "detect")):
+            raise RuntimeError(
+                "Live CARLA benchmark requires a valid detector (e.g. ObjectDetector). "
+                "Mock perception is strictly prohibited in real CARLA mode."
+            )
+
         # 1. Failure-Guided Exploration (Closed-loop adaptive execution)
         guided_metrics = self._run_guided_strategy()
 
@@ -257,6 +265,7 @@ class TestingStrategyBenchmark:
             exec_res = manager.execute(
                 selected,
                 backend=self.backend,
+                detector=self.detector,
                 max_frames=self.max_frames,
                 iou_threshold=self.iou_threshold,
             )
@@ -317,6 +326,7 @@ class TestingStrategyBenchmark:
             exec_res = manager.execute(
                 candidate,
                 backend=self.backend,
+                detector=self.detector,
                 max_frames=self.max_frames,
                 iou_threshold=self.iou_threshold,
             )
@@ -704,6 +714,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory to store benchmark exports.")
     args = parser.parse_args()
 
+    detector = None
+    if args.backend == BACKEND_CARLA and not args.dry_run:
+        from edgeforge.perception.detector import ObjectDetector
+
+        detector = ObjectDetector()
+
     benchmark = TestingStrategyBenchmark(
         scenario_budget=args.scenarios,
         max_frames_per_scenario=args.frames,
@@ -711,6 +727,7 @@ def main() -> int:
         seed=args.seed,
         backend=args.backend,
         output_dir=args.output_dir,
+        detector=detector,
     )
 
     if args.dry_run:

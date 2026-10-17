@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -55,6 +56,7 @@ class SensorFrame:
     collision_events: List[Any] = field(default_factory=list)
     lane_invasions: List[Any] = field(default_factory=list)
     camera_views: Dict[str, np.ndarray] = field(default_factory=dict)
+    rgb_frame_number: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +134,7 @@ class SensorManager:
         self.latest_rgb_views: Dict[str, np.ndarray] = {}
         self.latest_rgb_view_frames: Dict[str, int] = {}
         self._rgb_views_lock = threading.Lock()
+        self._rgb_views_cond = threading.Condition(self._rgb_views_lock)
 
         self.collision_events: List[Dict[str, Any]] = []
         self.lane_invasions: List[Dict[str, Any]] = []
@@ -217,6 +220,7 @@ class SensorManager:
                     if name == "front":
                         self.latest_rgb = frame
                         self.latest_rgb_frame = image.frame
+                        self._rgb_views_cond.notify_all()
                 if name == "front" and self.external_rgb_callback is not None:
                     self.external_rgb_callback(frame)
 
@@ -225,6 +229,23 @@ class SensorManager:
                 f"📷 {camera_name} RGB camera attached: "
                 f"{width}x{height} @ {fov}° tick={tick}s"
             )
+
+    def wait_for_rgb_frame(
+        self,
+        frame_number: int,
+        timeout: float = 2.0,
+    ) -> Optional[np.ndarray]:
+        """Wait until front camera receives the frame matching the given frame_number."""
+        deadline = time.monotonic() + timeout
+        with self._rgb_views_lock:
+            while self.latest_rgb_frame < frame_number:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._rgb_views_cond.wait(timeout=min(0.05, remaining))
+            if self.latest_rgb_frame == frame_number:
+                return self.latest_rgb
+            return None
 
     def get_synchronized_rgb_views(self, frame_number: int) -> Dict[str, np.ndarray]:
         """Return only camera frames captured on the requested simulator tick."""

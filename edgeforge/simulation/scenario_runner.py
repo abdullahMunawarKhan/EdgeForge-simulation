@@ -272,6 +272,11 @@ class ScenarioRunner:
             self._sensor_mgr = MockSensorManager(self._client)
             self._vehicle_to_state_fn = mock_vehicle_to_state
         else:
+            if isinstance(client, MockCarlaClient):
+                raise ValueError(
+                    "Cannot use MockCarlaClient when backend is 'carla'. "
+                    "Synthetic mock client is strictly prohibited in real CARLA mode."
+                )
             self._client = client or CarlaClient()
             self._actor_mgr = ActorManager(self._client)
             self._sensor_mgr = SensorManager(self._client)
@@ -341,7 +346,10 @@ class ScenarioRunner:
         MEDIUM / HIGH risk levels before Person 2 wires YOLO.
         """
         if self._backend != BACKEND_MOCK:
-            return []
+            raise RuntimeError(
+                "latest_mock_ground_truth_detections is strictly prohibited in real CARLA mode. "
+                "In real CARLA mode, use latest_ground_truth_objects."
+            )
         return list(getattr(self._sensor_mgr, "latest_ground_truth_objects", []) or [])
 
     @property
@@ -352,12 +360,19 @@ class ScenarioRunner:
         if self._backend == BACKEND_MOCK:
             return self.latest_mock_ground_truth_detections
 
-        if self._backend != BACKEND_CARLA or not self._ego_bundle or not self._traffic_bundle:
-            return []
+        if self._backend != BACKEND_CARLA:
+            raise RuntimeError(
+                f"Unsupported backend for ground truth extraction: {self._backend}"
+            )
+
+        if not self._ego_bundle or not self._traffic_bundle:
+            raise RuntimeError(
+                "Cannot extract CARLA ground truth before ego and traffic bundles are spawned."
+            )
 
         camera = getattr(self._sensor_mgr, "rgb_cameras", {}).get("front")
         if camera is None:
-            return []
+            raise RuntimeError("Cannot extract CARLA ground truth without 'front' RGB camera.")
 
         camera_cfg = self._cfg.get("sensors", {}).get("rgb_camera", {})
         actors = (
@@ -537,10 +552,24 @@ class ScenarioRunner:
                     if a.alive and a.id != ego.id and "vehicle" in a.type_id
                 ]
                 self._sensor_mgr.update_for_tick(frame_number, timestamp_s, npc_list)
+                rgb_frame = self._sensor_mgr.latest_rgb
+                rgb_frame_number = (
+                    self._sensor_mgr.latest_rgb_frame
+                    if rgb_frame is not None
+                    else None
+                )
             else:
                 snap: WorldSnapshot = self._client.tick()
                 frame_number = snap.frame
                 timestamp_s = snap.timestamp
+                rgb_frame = self._sensor_mgr.wait_for_rgb_frame(
+                    frame_number, timeout=settings.CARLA_TIMEOUT
+                )
+                rgb_frame_number = (
+                    self._sensor_mgr.latest_rgb_frame
+                    if rgb_frame is not None
+                    else None
+                )
 
             if start_sim_time is None:
                 start_sim_time = timestamp_s
@@ -559,11 +588,12 @@ class ScenarioRunner:
             yield SensorFrame(
                 timestamp=timestamp_s,
                 frame_number=frame_number,
-                rgb=self._sensor_mgr.latest_rgb,
+                rgb=rgb_frame,
                 vehicle_state=vs,
                 collision_events=collisions,
                 lane_invasions=lane_inv,
                 camera_views=self._sensor_mgr.get_synchronized_rgb_views(frame_number),
+                rgb_frame_number=rgb_frame_number,
             )
 
             # Rough wall-clock throttling (UX only – determinism doesn't depend on this).

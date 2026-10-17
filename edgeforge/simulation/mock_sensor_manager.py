@@ -49,6 +49,7 @@ class SensorFrame:
     collision_events: List[Any] = field(default_factory=list)
     lane_invasions: List[Any] = field(default_factory=list)
     camera_views: Dict[str, np.ndarray] = field(default_factory=dict)
+    rgb_frame_number: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +360,16 @@ class MockSensorManager:
             for name, frame in self.latest_rgb_views.items()
             if self.latest_rgb_view_frames.get(name) == frame_number
         }
+
+    def wait_for_rgb_frame(
+        self,
+        frame_number: int,
+        timeout: float = 2.0,
+    ) -> Optional[np.ndarray]:
+        """Return the RGB frame if it matches the requested frame_number."""
+        if self.latest_rgb_frame == frame_number:
+            return self.latest_rgb
+        return None
 
     def drain_lane_invasions(self) -> List[Dict[str, Any]]:
         items, self.lane_invasions = self.lane_invasions, []
