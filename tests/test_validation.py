@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from edgeforge.data.models import DetectedObject, PerceptionFailureRecord
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 from edgeforge.perception.validation import (
     SUPPORTED_EVALUATION_CLASSES,
     DetectionMatch,
@@ -293,6 +294,85 @@ def test_low_confidence_and_confidence_degradation_require_valid_baseline():
     assert "confidence_degradation" not in {
         failure.failure_type for failure in without_baseline.failure_records
     }
+
+
+@pytest.mark.parametrize(
+    ("predictions", "ground_truth", "failure_type", "object_class", "severity"),
+    [
+        (
+            [],
+            [GroundTruthObject(1, "car", (0, 0, 10, 10))],
+            "missed_detection",
+            "car",
+            "high",
+        ),
+        (
+            [{"bbox": [20, 0, 30, 10], "object_type": "car", "confidence": 0.9}],
+            [],
+            "false_positive",
+            "car",
+            "medium",
+        ),
+        (
+            [{"bbox": [4, 0, 14, 10], "object_type": "car", "confidence": 0.9}],
+            [GroundTruthObject(2, "car", (0, 0, 10, 10))],
+            "poor_localization",
+            "car",
+            "high",
+        ),
+        (
+            [{"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.2}],
+            [GroundTruthObject(3, "car", (0, 0, 10, 10))],
+            "low_confidence",
+            "car",
+            "medium",
+        ),
+    ],
+)
+def test_failure_records_include_identity_fingerprint_timestamp_and_conditions(
+    predictions, ground_truth, failure_type, object_class, severity
+):
+    conditions = {
+        "map": "Town02",
+        "weather": {"fog_density": 42.0, "precipitation": 20.0},
+        "traffic": {"vehicles": 2},
+    }
+
+    metrics = evaluate_detections(
+        predictions,
+        ground_truth,
+        scenario_conditions=conditions,
+        scenario_id="scenario-failures",
+        run_id="run-failures",
+        frame_id=7,
+    )
+
+    failure = next(f for f in metrics.failure_records if f.failure_type == failure_type)
+    assert failure.failure_id.startswith("failure_")
+    assert failure.timestamp.tzinfo is not None
+    assert failure.fingerprint == compute_failure_signature(failure)
+    assert failure.object_class == object_class
+    assert failure.severity == severity
+    assert failure.scenario_conditions == conditions
+    assert failure.scenario_id == "scenario-failures"
+    assert failure.run_id == "run-failures"
+    assert failure.frame_id == 7
+
+
+def test_failure_fingerprint_resolves_weather_preset_mapping():
+    failure = {
+        "failure_type": "missed_detection",
+        "object_class": "car",
+        "severity": "high",
+    }
+
+    assert compute_failure_signature(
+        failure,
+        {"weather": "HardRainNoon"},
+    ) == compute_failure_signature(
+        failure,
+        {"weather": {"preset": "HardRainNoon"}},
+    )
 
 
 def test_default_low_confidence_threshold_flags_near_threshold_detections():
@@ -737,5 +817,3 @@ def test_run_id_preservation_across_validation_pipeline(tmp_path):
     exported_failure = json.loads(failures_dest.read_text(encoding="utf-8").strip())
     assert exported_failure["scenario_id"] == "scenario-alpha"
     assert exported_failure["run_id"] == "run-omega-001"
-
-

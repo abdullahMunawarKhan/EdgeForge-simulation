@@ -159,6 +159,15 @@ def test_mock_client_blueprints_and_spawn() -> None:
     assert a.type_id.startswith("vehicle.")
 
 
+def test_mock_client_unknown_weather_preset_keeps_current_weather() -> None:
+    from edgeforge.simulation.mock_client import MockCarlaClient
+
+    client = MockCarlaClient()
+    client.set_weather_preset("UnknownPreset")
+
+    assert client.get_weather() == client.PRESET_WEATHER["ClearNoon"]
+
+
 # ---- MockActorManager (kinematics + path) -----------------------------------
 def test_mock_actor_manager_ego_moves_with_autopilot() -> None:
     from edgeforge.simulation.mock_actor_manager import MockActorManager

@@ -39,6 +39,9 @@ _GRANDPARENT = _THIS_DIR.parent.parent
 if str(_GRANDPARENT) not in sys.path:
     sys.path.insert(0, str(_GRANDPARENT))
 
+from edgeforge.config.settings import settings
+from edgeforge.data.models import DetectedObject
+from edgeforge.perception.validation import GroundTruthObject, extract_carla_ground_truth
 from edgeforge.simulation.actor_manager import ActorManager, EgoBundle, TrafficBundle
 from edgeforge.simulation.carla_client import CarlaClient, WorldSnapshot
 from edgeforge.simulation.mock_client import MockCarlaClient
@@ -340,6 +343,37 @@ class ScenarioRunner:
         if self._backend != BACKEND_MOCK:
             return []
         return list(getattr(self._sensor_mgr, "latest_ground_truth_objects", []) or [])
+
+    @property
+    def latest_ground_truth_objects(
+        self,
+    ) -> List[DetectedObject | GroundTruthObject]:
+        """Return image-space ground truth for the active mock or CARLA frame."""
+        if self._backend == BACKEND_MOCK:
+            return self.latest_mock_ground_truth_detections
+
+        if self._backend != BACKEND_CARLA or not self._ego_bundle or not self._traffic_bundle:
+            return []
+
+        camera = getattr(self._sensor_mgr, "rgb_cameras", {}).get("front")
+        if camera is None:
+            return []
+
+        camera_cfg = self._cfg.get("sensors", {}).get("rgb_camera", {})
+        actors = (
+            self._traffic_bundle.vehicles
+            + self._traffic_bundle.pedestrians
+            + self._traffic_bundle.bicycles
+        )
+        return extract_carla_ground_truth(
+            actors,
+            self._ego_bundle.vehicle,
+            camera.get_transform(),
+            int(camera_cfg.get("width", settings.CAMERA_WIDTH)),
+            int(camera_cfg.get("height", settings.CAMERA_HEIGHT)),
+            float(camera_cfg.get("fov", settings.CAMERA_FOV)),
+            actor_ids={int(actor.id) for actor in actors},
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

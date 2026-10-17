@@ -8,6 +8,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from edgeforge.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class MockTransform:

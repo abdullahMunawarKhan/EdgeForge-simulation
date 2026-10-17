@@ -79,6 +79,7 @@ class PerceptionPipeline:
         self,
         frame: Any,
         timestamp: Optional[Union[float, int, datetime]] = None,
+        raw_detections: Optional[List[RawDetection]] = None,
     ) -> List[DetectedObject]:
         """Process a single camera frame through the full perception stack.
 
@@ -88,6 +89,9 @@ class PerceptionPipeline:
             BGR NumPy array representing raw camera capture from CARLA (or offline image).
         timestamp :
             Optional frame capture timestamp (epoch seconds or datetime).
+        raw_detections :
+            Optional detector output. When provided, skips detector inference and
+            sends these detections through tracking and distance estimation.
 
         Returns
         -------
@@ -121,7 +125,8 @@ class PerceptionPipeline:
         self._frame_count += 1
 
         # Step 3: 2D Object Detection (YOLOv8)
-        raw_detections: List[RawDetection] = self.detector.detect(frame)
+        if raw_detections is None:
+            raw_detections = self.detector.detect(frame)
 
         # Step 4: Multi-Object Tracking (IoU)
         tracked_detections: List[TrackedDetection] = self.tracker.update(
