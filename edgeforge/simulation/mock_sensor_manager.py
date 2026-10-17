@@ -48,6 +48,7 @@ class SensorFrame:
     vehicle_state: Optional[VehicleState] = None
     collision_events: List[Any] = field(default_factory=list)
     lane_invasions: List[Any] = field(default_factory=list)
+    camera_views: Dict[str, np.ndarray] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +122,8 @@ class MockSensorManager:
 
         self.latest_rgb: Optional[np.ndarray] = None
         self.latest_rgb_frame: int = -1
+        self.latest_rgb_views: Dict[str, np.ndarray] = {}
+        self.latest_rgb_view_frames: Dict[str, int] = {}
         self.latest_ground_truth_objects: List[DetectedObject] = []
 
         self.collision_events: List[Dict[str, Any]] = []
@@ -178,6 +181,8 @@ class MockSensorManager:
             frame_px, dets = self._render_scene(W, H, sim_time_s, actors)
             self.latest_rgb = frame_px
             self.latest_rgb_frame = frame_number
+            self.latest_rgb_views["front"] = frame_px
+            self.latest_rgb_view_frames["front"] = frame_number
             self.latest_ground_truth_objects = dets
             if self.external_rgb_callback is not None:
                 self.external_rgb_callback(frame_px)
@@ -346,6 +351,14 @@ class MockSensorManager:
     def drain_collision_events(self) -> List[Dict[str, Any]]:
         events, self.collision_events = self.collision_events, []
         return events
+
+    def get_synchronized_rgb_views(self, frame_number: int) -> Dict[str, np.ndarray]:
+        """Return mock camera frames captured on the requested simulator tick."""
+        return {
+            name: frame
+            for name, frame in self.latest_rgb_views.items()
+            if self.latest_rgb_view_frames.get(name) == frame_number
+        }
 
     def drain_lane_invasions(self) -> List[Dict[str, Any]]:
         items, self.lane_invasions = self.lane_invasions, []

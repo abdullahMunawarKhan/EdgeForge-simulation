@@ -17,7 +17,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-
 class Settings(BaseSettings):
     """Typed settings for the EdgeForge platform.
 
@@ -48,6 +47,12 @@ class Settings(BaseSettings):
     CARLA_TIMEOUT: float = 10.0
 
     # ------------------------------------------------------------------
+    # Read-only dashboard API
+    # ------------------------------------------------------------------
+    API_HOST: str = "127.0.0.1"
+    API_PORT: int = Field(default=8000, gt=0, le=65535)
+
+    # ------------------------------------------------------------------
     # Camera / sensor defaults
     # ------------------------------------------------------------------
     CAMERA_WIDTH: int = 1280
@@ -64,9 +69,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     RISK_THRESHOLD: float = 0.7
     RISK_OBJECT_WEIGHTS: Dict[str, float] = {
+        # Vulnerable road users
         "pedestrian": 1.5,
         "bicycle": 1.2,
+        "motorcycle": 1.2,
+        # Larger vehicles (higher kinetic energy on impact)
         "car": 1.0,
+        "truck": 1.1,
+        "bus": 1.1,
+        # Infrastructure objects
+        "traffic_light": 0.6,
+        "stop_sign": 0.5,
     }
 
     # ------------------------------------------------------------------
@@ -74,7 +87,9 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
     YOLO_MODEL_PATH: str = "yolov8n.pt"
-    YOLO_NMS_IOU: float = Field(default=0.7, gt=0, le=1)
+    # 0.45 matches COCO evaluation standard and suppresses duplicate boxes
+    # from the same object that survive at the previous default of 0.70.
+    YOLO_NMS_IOU: float = Field(default=0.45, gt=0, le=1)
     YOLO_DEVICE: Literal["cpu", "cuda"] = "cpu"
     TRACKER_IOU_THRESHOLD: float = 0.3
     TRACKER_MAX_AGE: int = 5
@@ -84,6 +99,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     LOG_DIR: str = "logs"
     RUN_DIR: str = "runs"
+    HISTORY_DIR: str = "runs/history"
     METRICS_FORMAT: Literal["csv", "parquet"] = "csv"
 
     @field_validator("RISK_OBJECT_WEIGHTS")

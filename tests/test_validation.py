@@ -8,12 +8,19 @@ import numpy as np
 import pytest
 
 from edgeforge.data.models import DetectedObject, PerceptionFailureRecord
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 from edgeforge.perception.validation import (
+    SUPPORTED_EVALUATION_CLASSES,
+    DetectionMatch,
     FailureSeverityRules,
     GroundTruthObject,
+    RunValidationMetrics,
+    ValidationMetrics,
+    aggregate_run_metrics,
     carla_actor_class,
     evaluate_detections,
     export_failure_report,
+    export_run_report,
     extract_carla_ground_truth,
     project_carla_actor_bbox,
 )
@@ -289,6 +296,85 @@ def test_low_confidence_and_confidence_degradation_require_valid_baseline():
     }
 
 
+@pytest.mark.parametrize(
+    ("predictions", "ground_truth", "failure_type", "object_class", "severity"),
+    [
+        (
+            [],
+            [GroundTruthObject(1, "car", (0, 0, 10, 10))],
+            "missed_detection",
+            "car",
+            "high",
+        ),
+        (
+            [{"bbox": [20, 0, 30, 10], "object_type": "car", "confidence": 0.9}],
+            [],
+            "false_positive",
+            "car",
+            "medium",
+        ),
+        (
+            [{"bbox": [4, 0, 14, 10], "object_type": "car", "confidence": 0.9}],
+            [GroundTruthObject(2, "car", (0, 0, 10, 10))],
+            "poor_localization",
+            "car",
+            "high",
+        ),
+        (
+            [{"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.2}],
+            [GroundTruthObject(3, "car", (0, 0, 10, 10))],
+            "low_confidence",
+            "car",
+            "medium",
+        ),
+    ],
+)
+def test_failure_records_include_identity_fingerprint_timestamp_and_conditions(
+    predictions, ground_truth, failure_type, object_class, severity
+):
+    conditions = {
+        "map": "Town02",
+        "weather": {"fog_density": 42.0, "precipitation": 20.0},
+        "traffic": {"vehicles": 2},
+    }
+
+    metrics = evaluate_detections(
+        predictions,
+        ground_truth,
+        scenario_conditions=conditions,
+        scenario_id="scenario-failures",
+        run_id="run-failures",
+        frame_id=7,
+    )
+
+    failure = next(f for f in metrics.failure_records if f.failure_type == failure_type)
+    assert failure.failure_id.startswith("failure_")
+    assert failure.timestamp.tzinfo is not None
+    assert failure.fingerprint == compute_failure_signature(failure)
+    assert failure.object_class == object_class
+    assert failure.severity == severity
+    assert failure.scenario_conditions == conditions
+    assert failure.scenario_id == "scenario-failures"
+    assert failure.run_id == "run-failures"
+    assert failure.frame_id == 7
+
+
+def test_failure_fingerprint_resolves_weather_preset_mapping():
+    failure = {
+        "failure_type": "missed_detection",
+        "object_class": "car",
+        "severity": "high",
+    }
+
+    assert compute_failure_signature(
+        failure,
+        {"weather": "HardRainNoon"},
+    ) == compute_failure_signature(
+        failure,
+        {"weather": {"preset": "HardRainNoon"}},
+    )
+
+
 def test_default_low_confidence_threshold_flags_near_threshold_detections():
     metrics = evaluate_detections(
         [{"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.55}],
@@ -371,3 +457,363 @@ def test_failure_report_exports_json_and_jsonl(tmp_path, suffix, report_format):
         assert json.loads(content)[0]["failure_type"] == "missed_detection"
     else:
         assert json.loads(content)["frame_id"] == 7
+
+
+def test_matched_box_iou_computation():
+    """Verify matched-box IoU calculation for single, multiple, and zero matches."""
+    # Two matches: one with IoU 1.0 (0-10 vs 0-10), one with IoU 0.6 (0-10 vs 2-10 -> 8/12 = 0.6667)
+    predictions = [
+        {"bbox": [0, 0, 10, 10], "object_type": "car"},
+        {"bbox": [2, 0, 10, 10], "object_type": "pedestrian"},
+    ]
+    truth = [
+        GroundTruthObject(1, "car", (0, 0, 10, 10)),
+        GroundTruthObject(2, "pedestrian", (0, 0, 10, 10)),
+    ]
+
+    metrics = evaluate_detections(predictions, truth, iou_threshold=0.5)
+
+    assert metrics.true_positives == 2
+    assert len(metrics.matches) == 2
+    expected_iou = (1.0 + (80.0 / 100.0)) / 2.0  # (1.0 + 0.8) / 2 = 0.9
+    assert metrics.matched_iou == pytest.approx(expected_iou)
+    assert metrics.matched_box_iou == pytest.approx(expected_iou)
+    assert metrics.mean_iou == pytest.approx(expected_iou)
+
+    # Zero matches -> matched_iou is 0.0
+    empty_metrics = evaluate_detections([], [])
+    assert empty_metrics.matched_iou == 0.0
+    assert empty_metrics.matched_box_iou == 0.0
+
+
+def test_duplicate_predictions_handling():
+    """Duplicate predictions for the same object: higher IoU matches as TP, duplicate is FP."""
+    truth = [GroundTruthObject(1, "car", (0, 0, 10, 10))]
+    predictions = [
+        {"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.95},
+        {"bbox": [1, 0, 10, 10], "object_type": "car", "confidence": 0.85},
+    ]
+
+    metrics = evaluate_detections(predictions, truth, iou_threshold=0.5)
+
+    assert metrics.true_positives == 1
+    assert metrics.false_positives == 1
+    assert metrics.missed_detections == 0
+    assert metrics.precision == pytest.approx(0.5)
+    assert metrics.recall == pytest.approx(1.0)
+    assert metrics.f1 == pytest.approx(2.0 * 0.5 * 1.0 / 1.5)
+
+    # Ensure the duplicate is recorded as a false positive, NOT poor localization
+    fp_records = [f for f in metrics.failure_records if f.failure_type == "false_positive"]
+    assert len(fp_records) == 1
+    assert fp_records[0].confidence == 0.85
+    assert not any(f.failure_type == "poor_localization" for f in metrics.failure_records)
+
+
+def test_multiple_predictions_competing_for_ground_truth_greedy_iou():
+    """Greedy selection assigns the prediction with the highest IoU to the ground truth."""
+    truth = [GroundTruthObject(10, "car", (0, 0, 10, 10))]
+    predictions = [
+        {"bbox": [4, 0, 10, 10], "object_type": "car", "confidence": 0.7},  # IoU = 60/100 = 0.6
+        {"bbox": [1, 0, 10, 10], "object_type": "car", "confidence": 0.9},  # IoU = 90/100 = 0.9
+    ]
+
+    metrics = evaluate_detections(predictions, truth, iou_threshold=0.5)
+
+    assert metrics.true_positives == 1
+    assert metrics.matches[0].prediction_index == 1
+    assert metrics.matches[0].iou == pytest.approx(0.9)
+    assert metrics.false_positives == 1
+    assert metrics.false_positive_indices == (0,)
+
+
+def test_multiple_ground_truth_competing_for_one_prediction():
+    """One prediction overlapping two ground truths matches the highest IoU; the other is missed."""
+    predictions = [{"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.9}]
+    truth = [
+        GroundTruthObject(1, "car", (0, 0, 10, 10)),   # IoU = 1.0
+        GroundTruthObject(2, "car", (2, 0, 10, 10)),   # IoU = 0.8
+    ]
+
+    metrics = evaluate_detections(predictions, truth, iou_threshold=0.5)
+
+    assert metrics.true_positives == 1
+    assert metrics.false_positives == 0
+    assert metrics.missed_detections == 1
+    assert metrics.matches[0].ground_truth_index == 0
+    assert metrics.missed_ground_truth_indices == (1,)
+    assert [f.failure_type for f in metrics.failure_records] == ["missed_detection"]
+    assert metrics.failure_records[0].actor_id == 2
+
+
+def test_evaluation_classes_excludes_unsupported_classes():
+    """Predictions outside evaluation_classes must NOT be counted as false positives."""
+    predictions = [
+        {"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.9},
+        {"bbox": [20, 20, 30, 30], "object_type": "traffic_cone", "confidence": 0.85},
+        {"bbox": [40, 40, 50, 50], "object_type": "dog", "confidence": 0.80},
+    ]
+    truth = [GroundTruthObject(1, "car", (0, 0, 10, 10))]
+
+    metrics = evaluate_detections(
+        predictions,
+        truth,
+        evaluation_classes=["car", "pedestrian"],
+    )
+
+    assert metrics.true_positives == 1
+    assert metrics.false_positives == 0
+    assert metrics.missed_detections == 0
+    assert metrics.precision == 1.0
+    assert metrics.recall == 1.0
+    assert metrics.f1 == 1.0
+    assert metrics.excluded_prediction_count == 2
+    assert len(metrics.failure_records) == 0
+
+
+def test_excluded_classes_parameter():
+    """Explicitly excluded classes are filtered out and do not produce false positives."""
+    predictions = [
+        {"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.9},
+        {"bbox": [20, 20, 30, 30], "object_type": "bicycle", "confidence": 0.85},
+    ]
+    truth = [GroundTruthObject(1, "car", (0, 0, 10, 10))]
+
+    metrics = evaluate_detections(
+        predictions,
+        truth,
+        excluded_classes=["bicycle"],
+    )
+
+    assert metrics.true_positives == 1
+    assert metrics.false_positives == 0
+    assert metrics.excluded_prediction_count == 1
+    assert len(metrics.failure_records) == 0
+
+
+def test_carla_actor_class_dict_duck_typing():
+    """carla_actor_class correctly extracts class names from dictionary actor representations."""
+    assert carla_actor_class({"type_id": "vehicle.audi.etron"}) == "car"
+    assert carla_actor_class({"type_id": "vehicle.diamondback.century"}) == "bicycle"
+    assert carla_actor_class({"type_id": "walker.pedestrian.0002"}) == "pedestrian"
+    assert carla_actor_class({"object_type": "vehicle.yamaha.yzf"}) == "motorcycle"
+    assert carla_actor_class({"type_id": "static.prop.box"}) is None
+
+
+def test_aggregate_run_metrics_micro_averaging():
+    """Run aggregation must micro-average counts rather than averaging frame-level metrics."""
+    # Frame 1: 1 TP, 0 FP -> frame precision = 1.0
+    f1 = ValidationMetrics(
+        iou_threshold=0.5,
+        prediction_count=1,
+        ground_truth_count=1,
+        true_positives=1,
+        false_positives=0,
+        missed_detections=0,
+        precision=1.0,
+        recall=1.0,
+        f1=1.0,
+        matches=(DetectionMatch(0, 0, 0.9),),
+        false_positive_indices=(),
+        missed_ground_truth_indices=(),
+        failure_records=(),
+        matched_iou=0.9,
+    )
+    # Frame 2: 0 TP, 9 FP -> frame precision = 0.0
+    failure = PerceptionFailureRecord(
+        failure_type="false_positive",
+        object_class="car",
+        severity="medium",
+        frame_id=2,
+    )
+    f2 = ValidationMetrics(
+        iou_threshold=0.5,
+        prediction_count=9,
+        ground_truth_count=0,
+        true_positives=0,
+        false_positives=9,
+        missed_detections=0,
+        precision=0.0,
+        recall=0.0,
+        f1=0.0,
+        matches=(),
+        false_positive_indices=tuple(range(9)),
+        missed_ground_truth_indices=(),
+        failure_records=(failure,),
+        matched_iou=0.0,
+    )
+
+    # Frame-averaged precision would be (1.0 + 0.0)/2 = 0.5 (WRONG!)
+    # Micro-averaged precision is TP / (TP + FP) = 1 / (1 + 9) = 0.10 (CORRECT!)
+    run = aggregate_run_metrics(
+        [f1, f2],
+        scenario_id="scenario-test-42",
+        parameters={"fixed_delta": 0.05},
+    )
+
+    assert run.frames_processed == 2
+    assert run.predictions == 10
+    assert run.true_positives == 1
+    assert run.false_positives == 9
+    assert run.missed_detections == 0
+    assert run.precision == pytest.approx(0.10)
+    assert run.recall == pytest.approx(1.0)
+    assert run.f1 == pytest.approx(2.0 * 0.10 * 1.0 / 1.10)
+    assert run.matched_iou == pytest.approx(0.9)
+    assert run.scenario_id == "scenario-test-42"
+    assert run.parameters == {"fixed_delta": 0.05}
+    assert len(run.failures) == 1
+
+    d = run.to_dict()
+    assert d["precision"] == pytest.approx(0.10)
+    assert d["matched_iou"] == pytest.approx(0.9)
+    assert d["failure_count"] == 1
+
+
+def test_aggregate_run_metrics_empty_run():
+    """Aggregating an empty sequence of frame metrics produces zeroed metrics safely."""
+    run = aggregate_run_metrics([])
+
+    assert run.frames_processed == 0
+    assert run.predictions == 0
+    assert run.ground_truth_objects == 0
+    assert run.true_positives == 0
+    assert run.false_positives == 0
+    assert run.missed_detections == 0
+    assert run.precision == 0.0
+    assert run.recall == 0.0
+    assert run.f1 == 0.0
+    assert run.matched_iou == 0.0
+    assert run.failures == ()
+
+
+def test_export_run_report_persists_metrics_and_failures(tmp_path):
+    """export_run_report saves run-level metrics JSON and failure records JSONL."""
+    failure = PerceptionFailureRecord(
+        failure_type="poor_localization",
+        object_class="truck",
+        predicted_bbox=[0, 0, 10, 10],
+        ground_truth_bbox=[0, 0, 15, 15],
+        iou=0.44,
+        severity="high",
+        frame_id=15,
+        scenario_id="run-exp-1",
+    )
+    run = RunValidationMetrics(
+        frames_processed=10,
+        predictions=12,
+        ground_truth_objects=10,
+        true_positives=8,
+        false_positives=4,
+        missed_detections=2,
+        precision=8 / 12,
+        recall=8 / 10,
+        f1=2 * (8 / 12) * (8 / 10) / ((8 / 12) + (8 / 10)),
+        matched_iou=0.82,
+        iou_threshold=0.5,
+        failures=(failure,),
+        scenario_id="run-exp-1",
+        scenario_conditions={"weather": {"fog_density": 20.0}},
+        parameters={"fixed_delta_seconds": 0.05},
+    )
+
+    metrics_dest = tmp_path / "metrics.json"
+    failures_dest = tmp_path / "failures.jsonl"
+
+    m_path, f_path = export_run_report(
+        run,
+        metrics_dest,
+        failures_destination=failures_dest,
+        failure_format="jsonl",
+    )
+
+    assert m_path.exists()
+    assert f_path.exists()
+
+    metrics_data = json.loads(metrics_dest.read_text(encoding="utf-8"))
+    assert metrics_data["scenario_id"] == "run-exp-1"
+    assert metrics_data["true_positives"] == 8
+    assert metrics_data["matched_iou"] == 0.82
+    assert metrics_data["parameters"] == {"fixed_delta_seconds": 0.05}
+
+    failure_line = json.loads(failures_dest.read_text(encoding="utf-8").strip())
+    assert failure_line["failure_type"] == "poor_localization"
+    assert failure_line["object_class"] == "truck"
+    assert failure_line["frame_id"] == 15
+
+
+def test_evaluation_classes_excludes_invalid_box_out_of_scope():
+    """Out-of-scope classes with invalid/missing bboxes are excluded cleanly without FP or failure records."""
+    predictions = [
+        {"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.9},
+        {"bbox": None, "object_type": "traffic_cone", "confidence": 0.8},
+        {"bbox": [0, 0, float("nan"), 1], "object_type": "dog", "confidence": 0.7},
+    ]
+    truth = [
+        GroundTruthObject(1, "car", (0, 0, 10, 10)),
+        GroundTruthObject(2, "bird", (0, 0, 0, 0)),
+    ]
+
+    metrics = evaluate_detections(
+        predictions,
+        truth,
+        evaluation_classes=["car"],
+    )
+
+    assert metrics.true_positives == 1
+    assert metrics.false_positives == 0
+    assert metrics.missed_detections == 0
+    assert metrics.precision == 1.0
+    assert metrics.recall == 1.0
+    assert metrics.f1 == 1.0
+    assert metrics.excluded_prediction_count == 2
+    assert metrics.excluded_ground_truth_count == 1
+    assert len(metrics.failure_records) == 0
+
+
+def test_run_id_preservation_across_validation_pipeline(tmp_path):
+    """run_id is preserved across evaluation, aggregation, and file exports."""
+    prediction = {"bbox": [0, 0, 10, 10], "object_type": "car", "confidence": 0.3}
+    truth = [GroundTruthObject(1, "car", (0, 0, 10, 10))]
+
+    metrics = evaluate_detections(
+        [prediction],
+        truth,
+        scenario_id="scenario-alpha",
+        run_id="run-omega-001",
+        frame_id=42,
+    )
+
+    assert len(metrics.failure_records) > 0
+    assert metrics.failure_records[0].scenario_id == "scenario-alpha"
+    assert metrics.failure_records[0].run_id == "run-omega-001"
+    assert metrics.failure_records[0].frame_id == 42
+
+    run = aggregate_run_metrics(
+        [metrics],
+        scenario_id="scenario-alpha",
+        run_id="run-omega-001",
+        parameters={"fixed_delta": 0.05},
+    )
+
+    assert run.scenario_id == "scenario-alpha"
+    assert run.run_id == "run-omega-001"
+    assert run.to_dict()["run_id"] == "run-omega-001"
+    assert run.failures[0].run_id == "run-omega-001"
+
+    metrics_dest = tmp_path / "run_metrics.json"
+    failures_dest = tmp_path / "run_failures.jsonl"
+    export_run_report(
+        run,
+        metrics_dest,
+        failures_destination=failures_dest,
+        failure_format="jsonl",
+    )
+
+    exported_metrics = json.loads(metrics_dest.read_text(encoding="utf-8"))
+    assert exported_metrics["scenario_id"] == "scenario-alpha"
+    assert exported_metrics["run_id"] == "run-omega-001"
+
+    exported_failure = json.loads(failures_dest.read_text(encoding="utf-8").strip())
+    assert exported_failure["scenario_id"] == "scenario-alpha"
+    assert exported_failure["run_id"] == "run-omega-001"

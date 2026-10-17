@@ -9,11 +9,14 @@ lane information, …) without touching the pipeline code.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Literal, Optional
+from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,9 @@ class RiskAssessment(BaseModel):
 class PerceptionFailureRecord(BaseModel):
     """Structured validation failure associated with a prediction or actor."""
 
+    failure_id: str = Field(default_factory=lambda: f"failure_{uuid4().hex}")
+    fingerprint: str = ""
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     failure_type: Literal[
         "missed_detection",
         "false_positive",
@@ -115,9 +121,66 @@ class PerceptionFailureRecord(BaseModel):
     iou: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     severity: Literal["low", "medium", "high", "critical"]
     frame_id: Optional[int] = None
+    run_id: Optional[str] = None
     scenario_id: Optional[str] = None
     actor_id: Optional[int] = None
     message: str = ""
+
+    @model_validator(mode="after")
+    def set_fingerprint(self) -> PerceptionFailureRecord:
+        if not self.fingerprint:
+            self.fingerprint = compute_failure_signature(self)
+        return self
+
+
+class HistoricalRunRecord(BaseModel):
+    """Persisted metrics and context for one validation run."""
+
+    run_id: str
+    scenario_id: str
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    iou_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    frames_processed: int = Field(default=0, ge=0)
+    predictions: int = Field(default=0, ge=0)
+    ground_truth_objects: int = Field(default=0, ge=0)
+    true_positives: int = Field(default=0, ge=0)
+    false_positives: int = Field(default=0, ge=0)
+    missed_detections: int = Field(default=0, ge=0)
+    precision: float = Field(default=0.0, ge=0.0, le=1.0)
+    recall: float = Field(default=0.0, ge=0.0, le=1.0)
+    f1: float = Field(default=0.0, ge=0.0, le=1.0)
+    matched_iou: float = Field(default=0.0, ge=0.0, le=1.0)
+    scenario_conditions: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    failure_count: int = Field(default=0, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    excluded_predictions: int = Field(default=0, ge=0)
+    excluded_ground_truth: int = Field(default=0, ge=0)
+    scenario_metrics: dict[str, float] = Field(default_factory=dict)
+
+    @property
+    def tp(self) -> int:
+        return self.true_positives
+
+    @property
+    def fp(self) -> int:
+        return self.false_positives
+
+    @property
+    def fn(self) -> int:
+        return self.missed_detections
+
+    @property
+    def false_negatives(self) -> int:
+        return self.missed_detections
+
+    @property
+    def matched_box_iou(self) -> float:
+        return self.matched_iou
+
+    @property
+    def mean_iou(self) -> float:
+        return self.matched_iou
 
 
 # ---------------------------------------------------------------------------

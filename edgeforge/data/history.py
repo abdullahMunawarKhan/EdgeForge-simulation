@@ -39,6 +39,7 @@ from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from edgeforge.config.settings import PROJECT_ROOT, settings
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 from edgeforge.data.models import HistoricalRunRecord, PerceptionFailureRecord
 from edgeforge.utils.logger import get_logger
 
@@ -288,6 +289,10 @@ class RunHistoryStore:
                     updates["scenario_id"] = scenario_id
                 if not item.scenario_conditions and parent_conditions:
                     updates["scenario_conditions"] = dict(parent_conditions)
+                    updates["fingerprint"] = compute_failure_signature(
+                        item,
+                        scenario_conditions=parent_conditions,
+                    )
                 output.append(item.model_copy(update=updates) if updates else item)
             elif isinstance(item, Mapping):
                 f_dict = dict(item)
@@ -311,6 +316,7 @@ class RunHistoryStore:
         *,
         run_id: str | None = None,
         scenario_id: str | None = None,
+        scenario_metrics: Mapping[str, float] | None = None,
         overwrite: bool = False,
     ) -> HistoricalRunRecord:
         """Persist a completed validation run and its failure records atomically.
@@ -334,6 +340,10 @@ class RunHistoryStore:
             The saved, validated historical run record.
         """
         record = self._coerce_run_record(run_record, run_id=run_id, scenario_id=scenario_id)
+        if scenario_metrics is not None:
+            record = HistoricalRunRecord.model_validate(
+                record.model_dump() | {"scenario_metrics": dict(scenario_metrics)}
+            )
         resolved_run_id = record.run_id
 
         run_file = self.run_path(resolved_run_id)

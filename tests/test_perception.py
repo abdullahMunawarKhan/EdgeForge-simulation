@@ -29,6 +29,7 @@ from edgeforge.perception import (
     PerceptionPipeline,
     RawDetection,
     TrackedDetection,
+    adapt_ground_truth_detections,
     compute_iou,
 )
 
@@ -494,6 +495,38 @@ class TestObjectDetector:
 
         assert len(detections) == 1
         assert detections[0].bbox == [1.0, 1.0, 8.0, 8.0]
+
+    def test_mock_ground_truth_adapter_scales_boxes_to_resized_frame(self) -> None:
+        detections = [
+            DetectedObject(
+                object_id="mock-car",
+                object_type="car",
+                confidence=0.87,
+                bbox=[10.0, 20.0, 30.0, 50.0],
+            )
+        ]
+
+        raw = adapt_ground_truth_detections(
+            detections,
+            source_size=(100, 100),
+            target_size=(200, 150),
+        )
+
+        assert len(raw) == 1
+        assert raw[0].bbox == [20.0, 30.0, 60.0, 75.0]
+        assert raw[0].object_type == "car"
+        assert raw[0].confidence == pytest.approx(0.87)
+
+    def test_mock_ground_truth_adapter_rejects_invalid_dimensions_and_boxes(self) -> None:
+        detection = DetectedObject(
+            object_id="mock-car",
+            object_type="car",
+            confidence=0.87,
+        )
+        with pytest.raises(ValueError, match="dimensions must be positive"):
+            adapt_ground_truth_detections([detection], (0, 10), (20, 20))
+        with pytest.raises(ValueError, match="four-coordinate bounding box"):
+            adapt_ground_truth_detections([detection], (10, 10), (20, 20))
 
     def test_predict_detections_work_with_pipeline_and_risk_engine(
         self, valid_frame: np.ndarray
@@ -1150,6 +1183,76 @@ class TestPerceptionPipeline:
         assert len(out2) == 1
         assert out1[0].object_id == "track_001"
         assert out2[0].object_id == "track_001"
+
+    def test_mock_detections_use_tracker_and_distance_stages(
+        self, valid_bgr_frame: np.ndarray
+    ) -> None:
+        detector = MagicMock(spec=ObjectDetector)
+        pipeline = PerceptionPipeline(
+            detector=detector,
+            distance_estimator=DistanceEstimator(focal_length=640.0, alpha=1.0),
+        )
+        first = [
+            RawDetection([100.0, 100.0, 160.0, 148.0], "car", 0.91),
+            RawDetection([300.0, 100.0, 340.0, 148.0], "pedestrian", 0.82),
+        ]
+        second = [
+            RawDetection([102.0, 100.0, 162.0, 160.0], "car", 0.93),
+        ]
+
+        first_frame = pipeline.process_frame(
+            valid_bgr_frame,
+            timestamp=1.0,
+            raw_detections=first,
+        )
+        second_frame = pipeline.process_frame(
+            valid_bgr_frame,
+            timestamp=2.0,
+            raw_detections=second,
+        )
+
+        assert detector.detect.call_count == 0
+        assert [item.object_type for item in first_frame] == ["car", "pedestrian"]
+        assert [item.object_id for item in first_frame] == ["track_001", "track_002"]
+        assert first_frame[0].bbox == first[0].bbox
+        assert first_frame[0].confidence == pytest.approx(0.91)
+        assert first_frame[1].confidence == pytest.approx(0.82)
+        assert first_frame[0].distance == pytest.approx(20.0)
+        assert first_frame[0].relative_speed == 0.0
+        assert len(second_frame) == 1
+        assert second_frame[0].object_id == first_frame[0].object_id
+        assert second_frame[0].distance == pytest.approx(16.0)
+        assert second_frame[0].relative_speed == pytest.approx(-4.0)
+
+    def test_empty_frame_detections_age_tracks_and_later_reassociate(
+        self, valid_bgr_frame: np.ndarray
+    ) -> None:
+        detector = MagicMock(spec=ObjectDetector)
+        pipeline = PerceptionPipeline(detector=detector)
+        detection = RawDetection(
+            [500.0, 250.0, 600.0, 350.0],
+            "car",
+            0.9,
+        )
+        first = pipeline.process_frame(valid_bgr_frame, raw_detections=[detection])
+        missing = pipeline.process_frame(valid_bgr_frame, raw_detections=[])
+        returned = pipeline.process_frame(valid_bgr_frame, raw_detections=[detection])
+
+        assert len(first) == 1
+        assert missing == []
+        assert len(returned) == 1
+        assert returned[0].object_id == first[0].object_id
+        assert detector.detect.call_count == 0
+
+    def test_detector_errors_are_not_silently_converted_to_empty_results(
+        self, valid_bgr_frame: np.ndarray
+    ) -> None:
+        detector = MagicMock(spec=ObjectDetector)
+        detector.detect.side_effect = RuntimeError("inference failed")
+        pipeline = PerceptionPipeline(detector=detector)
+
+        with pytest.raises(RuntimeError, match="inference failed"):
+            pipeline.process_frame(valid_bgr_frame)
 
     def test_4_distance_is_populated(self, valid_bgr_frame: np.ndarray) -> None:
         """DetectedObject has a physically meaningful positive distance populated."""

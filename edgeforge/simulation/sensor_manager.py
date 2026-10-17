@@ -17,11 +17,15 @@ Two kinds of helpers live here:
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-import carla
+try:
+    import carla
+except ImportError:
+    carla = None
 import numpy as np
 
 from edgeforge.config import settings
@@ -29,6 +33,12 @@ from edgeforge.data.models import DetectedObject, Location, VehicleState
 from edgeforge.utils import get_logger
 
 logger = get_logger(__name__)
+
+CAMERA_VIEW_MOUNTS = {
+    "front": (1.5, 0.0, 2.4, 0.0, 0.0),
+    "right_side": (0.0, 2.0, 2.0, -5.0, 90.0),
+    "top_down": (0.0, 0.0, 20.0, -90.0, 0.0),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +54,7 @@ class SensorFrame:
     vehicle_state: Optional[VehicleState] = None
     collision_events: List[Any] = field(default_factory=list)
     lane_invasions: List[Any] = field(default_factory=list)
+    camera_views: Dict[str, np.ndarray] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +125,13 @@ class SensorManager:
     def __init__(self, client: "CarlaClient") -> None:  # type: ignore[name-defined]
         self._client = client
         self._sensors: List[carla.Actor] = []
+        self.rgb_cameras: Dict[str, Any] = {}
 
         self.latest_rgb: Optional[np.ndarray] = None
         self.latest_rgb_frame: int = -1
+        self.latest_rgb_views: Dict[str, np.ndarray] = {}
+        self.latest_rgb_view_frames: Dict[str, int] = {}
+        self._rgb_views_lock = threading.Lock()
 
         self.collision_events: List[Dict[str, Any]] = []
         self.lane_invasions: List[Dict[str, Any]] = []
@@ -134,10 +149,15 @@ class SensorManager:
         sensor_spec: Dict[str, Any],
     ) -> None:
         """Spawn every sensor declared in ``sensor_spec`` and attach to vehicle."""
+        if carla is None:
+            raise RuntimeError(
+                "The CARLA Python API is required to attach CARLA sensors. "
+                "Install carla or run inside an environment with the CARLA client library."
+            )
 
         rgb_cfg = sensor_spec.get("rgb_camera", {})
         if rgb_cfg.get("enabled", False):
-            self._attach_rgb_camera(
+            self._attach_rgb_cameras(
                 vehicle=vehicle,
                 width=int(rgb_cfg.get("width", settings.CAMERA_WIDTH)),
                 height=int(rgb_cfg.get("height", settings.CAMERA_HEIGHT)),
@@ -165,7 +185,7 @@ class SensorManager:
                 )
 
     # ---- RGB --------------------------------------------------------------
-    def _attach_rgb_camera(
+    def _attach_rgb_cameras(
         self,
         vehicle: carla.Vehicle,
         width: int,
@@ -179,23 +199,41 @@ class SensorManager:
         bp.set_attribute("fov", str(fov))
         bp.set_attribute("sensor_tick", str(tick))
 
-        # Standard front-facing windshield mount.
-        transform = carla.Transform(carla.Location(x=1.5, z=2.4))
-        sensor = self._client.world.spawn_actor(bp, transform, attach_to=vehicle)
-        self._client.register_actor(sensor)
-        self._sensors.append(sensor)
+        for camera_name, (x, y, z, pitch, yaw) in CAMERA_VIEW_MOUNTS.items():
+            transform = carla.Transform(
+                carla.Location(x=x, y=y, z=z),
+                carla.Rotation(pitch=pitch, yaw=yaw),
+            )
+            sensor = self._client.world.spawn_actor(bp, transform, attach_to=vehicle)
+            self._client.register_actor(sensor)
+            self._sensors.append(sensor)
+            self.rgb_cameras[camera_name] = sensor
 
-        def on_image(image: carla.Image) -> None:
-            frame = image_to_bgr(image)
-            self.latest_rgb = frame
-            self.latest_rgb_frame = image.frame
-            if self.external_rgb_callback is not None:
-                self.external_rgb_callback(frame)
+            def on_image(image: carla.Image, name: str = camera_name) -> None:
+                frame = image_to_bgr(image)
+                with self._rgb_views_lock:
+                    self.latest_rgb_views[name] = frame
+                    self.latest_rgb_view_frames[name] = image.frame
+                    if name == "front":
+                        self.latest_rgb = frame
+                        self.latest_rgb_frame = image.frame
+                if name == "front" and self.external_rgb_callback is not None:
+                    self.external_rgb_callback(frame)
 
-        sensor.listen(on_image)
-        logger.success(
-            f"📷 RGB camera attached: {width}x{height} @ {fov}° tick={tick}s"
-        )
+            sensor.listen(on_image)
+            logger.success(
+                f"📷 {camera_name} RGB camera attached: "
+                f"{width}x{height} @ {fov}° tick={tick}s"
+            )
+
+    def get_synchronized_rgb_views(self, frame_number: int) -> Dict[str, np.ndarray]:
+        """Return only camera frames captured on the requested simulator tick."""
+        with self._rgb_views_lock:
+            return {
+                name: frame
+                for name, frame in self.latest_rgb_views.items()
+                if self.latest_rgb_view_frames.get(name) == frame_number
+            }
 
     # ---- Collision --------------------------------------------------------
     def _attach_collision_sensor(self, vehicle: carla.Vehicle) -> None:
@@ -271,5 +309,6 @@ class SensorManager:
                 try:
                     s.stop()
                 except Exception:
-                    pass
+                    logger.exception("Could not stop a CARLA sensor during cleanup.")
         self._sensors.clear()
+        self.rgb_cameras.clear()

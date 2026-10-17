@@ -33,6 +33,10 @@ export function useLiveSimulation() {
   const [reportMessage, setReportMessage] = useState('')
   const clientRef = useRef(null)
 
+  const [actionLoading, setActionLoading] = useState(null)
+  const [actionError, setActionError] = useState(null)
+  const [actionSuccess, setActionSuccess] = useState(null)
+
   const retry = useCallback(() => {
     setRefreshKey((current) => current + 1)
   }, [])
@@ -48,6 +52,66 @@ export function useLiveSimulation() {
       setReportMessage('Report response received from the backend.')
     } catch (error) {
       setReportMessage(error instanceof Error ? error.message : 'Report request failed.')
+    }
+  }, [])
+
+  const startSimulation = useCallback(async (options = { backend: 'mock' }) => {
+    const client = clientRef.current
+    if (!client) {
+      setActionError('Configure the backend URL before starting simulation.')
+      return
+    }
+    setActionLoading('start')
+    setActionError(null)
+    setActionSuccess(null)
+    try {
+      const res = await client.startSimulation(options)
+      setActionSuccess(res.message || 'Simulation started.')
+      setRefreshKey((k) => k + 1)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to start simulation.')
+    } finally {
+      setActionLoading(null)
+    }
+  }, [])
+
+  const stopSimulation = useCallback(async () => {
+    const client = clientRef.current
+    if (!client) {
+      setActionError('Configure the backend URL before stopping simulation.')
+      return
+    }
+    setActionLoading('stop')
+    setActionError(null)
+    setActionSuccess(null)
+    try {
+      const res = await client.stopSimulation()
+      setActionSuccess(res.message || 'Simulation stopped.')
+      setRefreshKey((k) => k + 1)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to stop simulation.')
+    } finally {
+      setActionLoading(null)
+    }
+  }, [])
+
+  const updateConfiguration = useCallback(async (configuration) => {
+    const client = clientRef.current
+    if (!client) {
+      setActionError('Configure the backend URL before updating configuration.')
+      return
+    }
+    setActionLoading('config')
+    setActionError(null)
+    setActionSuccess(null)
+    try {
+      const res = await client.updateConfiguration(configuration)
+      setActionSuccess(res.message || 'Configuration updated.')
+      setRefreshKey((k) => k + 1)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to update configuration.')
+    } finally {
+      setActionLoading(null)
     }
   }, [])
 
@@ -206,6 +270,12 @@ export function useLiveSimulation() {
     requestLatestReport,
     reportMessage,
     backendConfigured: Boolean(baseUrl),
+    startSimulation,
+    stopSimulation,
+    updateConfiguration,
+    actionLoading,
+    actionError,
+    actionSuccess,
   }
 }
 

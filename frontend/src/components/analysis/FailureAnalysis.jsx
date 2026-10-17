@@ -22,6 +22,9 @@ import { ROAD_USER_CLASSES, WEATHER_CONDITIONS, SEVERITY_LABELS } from '@/types.
  * @property {string} [title]
  * @property {string} [description]
  * @property {import('@/types').FailureRecord[]} [failures]
+ * @property {Object|null} [historyData]
+ * @property {'demo'|'loading'|'available'|'error'} [historyState]
+ * @property {string|null} [historyError]
  * @property {string|null} [selectedFailureId]
  * @property {(failureId: string|null) => void} [onSelectFailure]
  * @property {(failure: import('@/types').FailureRecord) => void} [onReplay]
@@ -40,6 +43,9 @@ export function FailureAnalysis({
   title = 'Failure Analysis & Triage',
   description = 'Every illustrative failure lands in the register with a severity rank, object class, failure type and replay handle. Pick a record to view the ground-truth vs perception comparison and queue it for replay in the Scenario Lab.',
   failures = [],
+  historyData = null,
+  historyState = 'demo',
+  historyError = null,
   selectedFailureId = null,
   onSelectFailure,
   onReplay,
@@ -139,6 +145,83 @@ export function FailureAnalysis({
     setSeverityFilter('all')
     setRoadUserFilter('all')
     setWeatherFilter('all')
+  }
+
+  if (historyState !== 'demo') {
+    const records = Array.isArray(historyData?.failures) ? historyData.failures : []
+    return (
+      <PageSection id="failure-analysis">
+        <div className="mb-6">
+          <div className="chip chip-danger">{eyebrow}</div>
+          <h2 className="mt-2 text-2xl font-bold tracking-tight md:text-3xl">
+            Failure Analysis &amp; Triage
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm text-text-muted">
+            Persisted failures from the configured EdgeForge history API.
+          </p>
+        </div>
+        {historyState === 'loading' ? (
+          <p className="text-sm text-text-muted">Loading persisted failure history…</p>
+        ) : historyState === 'error' ? (
+          <p className="rounded-lg border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
+            Could not load persisted failure history: {historyError}
+          </p>
+        ) : records.length === 0 ? (
+          <p className="rounded-lg border border-border-subtle bg-surface/50 p-6 text-sm text-text-muted">
+            No persisted failure records are available.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {records.map((failure, index) => (
+              <li
+                className="rounded-lg border border-border-subtle bg-surface/70 p-4"
+                key={failure.failure_id ?? `${failure.run_id ?? 'run'}-${index}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-text">
+                    {failure.failure_type ?? 'Unclassified failure'}
+                  </span>
+                  <span className="chip chip-warning">{failure.severity ?? 'unknown'}</span>
+                </div>
+                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                  <div>
+                    <dt className="text-text-subtle">Failure ID</dt>
+                    <dd className="break-all font-mono text-text-muted">
+                      {failure.failure_id ?? 'Unavailable'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-text-subtle">Fingerprint</dt>
+                    <dd className="break-all font-mono text-text-muted">
+                      {failure.fingerprint || 'Unavailable'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-text-subtle">Object / frame</dt>
+                    <dd className="text-text-muted">
+                      {failure.object_class ?? 'Unknown class'}
+                      {' · '}
+                      {failure.frame_id ?? 'Frame unavailable'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-text-subtle">Run / timestamp</dt>
+                    <dd className="break-all text-text-muted">
+                      {failure.run_id ?? 'Run unavailable'}
+                      {' · '}
+                      {failure.timestamp ?? 'Timestamp unavailable'}
+                    </dd>
+                  </div>
+                </dl>
+                {failure.message ? (
+                  <p className="mt-3 text-xs text-text-muted">{failure.message}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </PageSection>
+    )
   }
 
   if (failures.length === 0) {

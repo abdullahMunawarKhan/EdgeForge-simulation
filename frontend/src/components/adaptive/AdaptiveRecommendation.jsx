@@ -24,6 +24,11 @@ import { DEFAULT_SCENARIO } from '@/data/labels.js'
  * @property {Partial<import('@/types').ScenarioConfig>} [currentScenario]  - current Scenario Lab state, used as fallback anchor
  * @property {(cfg: import('@/types').ScenarioConfig) => void} [onRunNextScenario]  - the primary integration callback
  * @property {() => void} [onResetExample]                                  - optional reset action
+ * @property {Object|null} [historyData]
+ * @property {Object|null} [serverRecommendations]
+ * @property {'demo'|'loading'|'available'|'error'} [historyState]
+ * @property {string|null} [historyError]
+ * @property {(recommendation: Object) => Promise<Object>} [onExecuteRecommendation]
  */
 
 /**
@@ -40,6 +45,11 @@ export function AdaptiveRecommendation({
   currentScenario = {},
   onRunNextScenario,
   onResetExample,
+  historyData = null,
+  serverRecommendations = null,
+  historyState = 'demo',
+  historyError = null,
+  onExecuteRecommendation,
 }) {
   const model = useMemo(
     () => buildAdaptiveRecommendations({ latestResult, failureRecords, coverageItems, selectedFailureId, currentScenario }),
@@ -48,6 +58,7 @@ export function AdaptiveRecommendation({
 
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [confirmation, setConfirmation] = useState(null)
+  const [executing, setExecuting] = useState(false)
 
   useEffect(() => {
     setSelectedIdx(0)
@@ -70,6 +81,170 @@ export function AdaptiveRecommendation({
   const onReset = () => {
     setConfirmation({ kind: 'reset', text: 'Reset to example fixture.' })
     onResetExample?.()
+  }
+
+  if (historyState !== 'demo') {
+    const ranked = Array.isArray(serverRecommendations?.recommendations)
+      ? serverRecommendations.recommendations
+      : []
+    const selectedRecommendation = ranked[selectedIdx] ?? ranked[0] ?? null
+    const executeSelected = async () => {
+      if (!selectedRecommendation || !onExecuteRecommendation) return
+      setExecuting(true)
+      setConfirmation(null)
+      try {
+        const result = await onExecuteRecommendation(selectedRecommendation)
+        setConfirmation({
+          kind: 'executed',
+          text: `Mock run ${result.run_id} ${result.status}; ${result.persisted ? 'history persisted' : 'not persisted'}.`,
+        })
+      } catch (error) {
+        setConfirmation({
+          kind: 'error',
+          text: error instanceof Error ? error.message : 'Recommended scenario execution failed.',
+        })
+      } finally {
+        setExecuting(false)
+      }
+    }
+
+    return (
+      <PageSection id="next-test" className="pt-10">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="chip chip-accent">{eyebrow}</div>
+            <div className="chip chip-warning">API-backed · mock execution</div>
+          </div>
+          <h2 className="text-xl font-semibold tracking-tight md:text-2xl">{title}</h2>
+          <p className="max-w-3xl text-xs text-text-muted md:text-sm">
+            Ranked by the backend scenario generator using persisted failure evidence,
+            severity, and coverage novelty. Executing a selection submits its exact stored
+            runner configuration to the mock executor.
+          </p>
+        </div>
+        {historyState === 'loading' ? (
+          <p className="mt-6 text-sm text-text-muted">Loading history and ranked scenarios…</p>
+        ) : historyState === 'error' ? (
+          <p className="mt-6 rounded-lg border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
+            Could not load API-backed scenario guidance: {historyError}
+          </p>
+        ) : ranked.length === 0 ? (
+          <p className="mt-6 rounded-lg border border-border-subtle bg-surface/50 p-6 text-sm text-text-muted">
+            No feasible unseen recommendations are available for the current history.
+          </p>
+        ) : (
+          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
+            <div className="panel divide-y divide-border-subtle overflow-hidden">
+              {ranked.map((recommendation, index) => (
+                <button
+                  key={recommendation.candidate_id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedIdx(index)
+                    setConfirmation(null)
+                  }}
+                  className={`w-full p-4 text-left hover:bg-surface-hover ${
+                    index === selectedIdx ? 'bg-surface-active' : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold text-text">
+                      #{index + 1} · {recommendation.scenario_id}
+                    </span>
+                    <span className="font-mono text-sm font-bold text-accent">
+                      {recommendation.overall_score.toFixed(3)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-text-muted">
+                    Candidate {recommendation.candidate_id}
+                  </p>
+                  <p className="mt-2 text-[11px] text-text-muted">
+                    {recommendation.selection_reason}
+                  </p>
+                </button>
+              ))}
+            </div>
+            <div className="panel p-5">
+              {selectedRecommendation ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-text">
+                      {selectedRecommendation.scenario_id}
+                    </h3>
+                    <span className="chip chip-accent">
+                      Score {selectedRecommendation.overall_score.toFixed(3)}
+                    </span>
+                  </div>
+                  <p className="mt-3 text-xs text-text-muted">
+                    {selectedRecommendation.selection_reason}
+                  </p>
+                  <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
+                    {Object.entries(selectedRecommendation.score_breakdown ?? {}).map(
+                      ([key, value]) => (
+                        <div key={key} className="rounded border border-border-subtle p-2.5">
+                          <dt className="text-text-subtle">{prettyFieldLabel(key)}</dt>
+                          <dd className="mt-1 font-mono text-text">{Number(value).toFixed(3)}</dd>
+                        </div>
+                      ),
+                    )}
+                  </dl>
+                  <div className="mt-4">
+                    <h4 className="text-xs font-semibold text-text">Historical evidence</h4>
+                    {(selectedRecommendation.historical_evidence ?? []).length > 0 ? (
+                      <ul className="mt-2 space-y-1 text-[11px] text-text-muted">
+                        {selectedRecommendation.historical_evidence.map((item, index) => (
+                          <li key={`${item.run_id}-${index}`}>
+                            {item.failure_type} · {item.severity} · run {item.run_id}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-text-muted">
+                        {selectedRecommendation.cold_start
+                          ? 'Cold start: no persisted runs or failure evidence yet.'
+                          : 'No similar historical failure was found; ranking favors unexplored conditions.'}
+                      </p>
+                    )}
+                  </div>
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-xs font-medium text-text">
+                      Exact executor configuration
+                    </summary>
+                    <pre className="mt-2 max-h-64 overflow-auto rounded bg-bg p-3 text-[10px] text-text-muted">
+                      {JSON.stringify(selectedRecommendation.scenario_config, null, 2)}
+                    </pre>
+                  </details>
+                  <button
+                    type="button"
+                    onClick={executeSelected}
+                    disabled={executing || !onExecuteRecommendation}
+                    className="btn btn-primary mt-4 h-10 px-5 text-sm disabled:opacity-60"
+                  >
+                    {executing ? 'Executing mock run…' : 'Execute as Next Mock Run'}
+                  </button>
+                </>
+              ) : null}
+              {confirmation ? (
+                <p
+                  role="status"
+                  className={`mt-3 rounded border p-3 text-xs ${
+                    confirmation.kind === 'error'
+                      ? 'border-danger/30 text-danger'
+                      : 'border-accent/30 text-accent'
+                  }`}
+                >
+                  {confirmation.text}
+                </p>
+              ) : null}
+              <div className="mt-4 text-[11px] text-text-subtle">
+                Persisted history currently contains {historyData?.coverage?.total_runs ?? 0} runs
+                and {historyData?.coverage?.total_failures ?? 0} failures.
+              </div>
+            </div>
+          </div>
+        )}
+      </PageSection>
+    )
   }
 
   const anchorSourceLabel = {

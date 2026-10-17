@@ -8,6 +8,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from edgeforge.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class MockTransform:
@@ -122,9 +126,53 @@ class MockCarlaClient:
                           "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 60.0,
                           "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 0.0,
                           "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "WetNoon":       {"cloudiness": 90.0, "precipitation": 0.0, "precipitation_deposits": 100.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 60.0,
+                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 100.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "WetSunset":     {"cloudiness": 90.0, "precipitation": 0.0, "precipitation_deposits": 100.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 100.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "MidRainyNoon":  {"cloudiness": 80.0, "precipitation": 40.0, "precipitation_deposits": 50.0,
+                          "wind_intensity": 25.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 60.0,
+                          "fog_density": 10.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 60.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
         "HardRainNoon":  {"cloudiness": 100.0, "precipitation": 80.0, "precipitation_deposits": 100.0,
                           "wind_intensity": 50.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 45.0,
-                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 100.0,
+                          "fog_density": 20.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 100.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "SoftRainNoon":  {"cloudiness": 60.0, "precipitation": 20.0, "precipitation_deposits": 20.0,
+                          "wind_intensity": 10.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 60.0,
+                          "fog_density": 5.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 30.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "ClearSunset":   {"cloudiness": 0.0, "precipitation": 0.0, "precipitation_deposits": 0.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 0.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "CloudySunset":  {"cloudiness": 80.0, "precipitation": 0.0, "precipitation_deposits": 0.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 0.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "WetCloudySunset":{"cloudiness": 80.0, "precipitation": 0.0, "precipitation_deposits": 80.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 10.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 80.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "MidRainSunset": {"cloudiness": 80.0, "precipitation": 40.0, "precipitation_deposits": 50.0,
+                          "wind_intensity": 25.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 15.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 60.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "HardRainSunset":{"cloudiness": 100.0, "precipitation": 80.0, "precipitation_deposits": 100.0,
+                          "wind_intensity": 50.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 25.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 100.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "SoftRainSunset":{"cloudiness": 80.0, "precipitation": 30.0, "precipitation_deposits": 30.0,
+                          "wind_intensity": 10.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 15.0,
+                          "fog_density": 15.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 50.0,
+                          "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
+        "ClearSunrise":  {"cloudiness": 0.0, "precipitation": 0.0, "precipitation_deposits": 0.0,
+                          "wind_intensity": 0.0, "sun_azimuth_angle": 0.0, "sun_altitude_angle": 5.0,
+                          "fog_density": 0.0, "fog_distance": 0.0, "fog_falloff": 0.0, "wetness": 0.0,
                           "scattering_intensity": 0.0, "mie_scattering_scale": 0.0, "rayleigh_scattering_scale": 0.0331},
     }
 
@@ -154,6 +202,9 @@ class MockCarlaClient:
         self._tick_callbacks: List[Callable[[MockWorldSnapshot], None]] = []
         self._lock = threading.RLock()
         self._sensors_blueprints: Dict[str, Any] = {}
+        # Written each tick by _advance_mock_actors in scenario_runner so
+        # MockSensorManager can compute relative closing speeds for NPC detections.
+        self._ego_state_snapshot: Optional[Any] = None
 
     # ------------------------------------------------------------------ connection
     def connect(self) -> bool:
@@ -197,11 +248,34 @@ class MockCarlaClient:
     def get_weather(self) -> Dict[str, float]:
         return dict(self._weather)
 
-    def set_weather(self, weather_params: Dict[str, float]) -> None:
+    def set_weather_preset(self, name: str) -> None:
+        """Apply a weather preset by name (case-insensitive)."""
+        # Try direct match then case-insensitive match
+        if name in self.PRESET_WEATHER:
+            self._weather = dict(self.PRESET_WEATHER[name])
+            return
+        lower_map = {k.lower(): k for k in self.PRESET_WEATHER}
+        if name.lower() in lower_map:
+            self._weather = dict(self.PRESET_WEATHER[lower_map[name.lower()]])
+            return
+        logger.warning(
+            f"Weather preset '{name}' not found in mock presets; keeping current weather."
+        )
+
+    def set_weather(self, weather_params: Any, preset_base: str = "ClearNoon") -> None:
+        """Apply a preset string or dictionary of fine-grained weather parameters."""
+        if isinstance(weather_params, str):
+            self.set_weather_preset(weather_params)
+            return
         if isinstance(weather_params, dict):
-            self._weather.update({k: v for k, v in weather_params.items() if k in self._weather})
-        elif isinstance(weather_params, str) and weather_params in self.PRESET_WEATHER:
-            self._weather = dict(self.PRESET_WEATHER[weather_params])
+            base_preset = weather_params.get("preset", preset_base)
+            if base_preset in self.PRESET_WEATHER:
+                self._weather = dict(self.PRESET_WEATHER[base_preset])
+            for k, v in weather_params.items():
+                if k in self._weather and isinstance(v, (int, float)):
+                    self._weather[k] = float(v)
+            return
+        raise TypeError(f"Unsupported weather_params type: {type(weather_params)}")
 
     # ------------------------------------------------------------------ blueprints + spawns
     def get_blueprint_library(self):
