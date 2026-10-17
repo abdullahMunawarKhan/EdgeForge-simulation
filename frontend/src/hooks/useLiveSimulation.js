@@ -64,10 +64,17 @@ export function useLiveSimulation() {
     setActionLoading('start')
     setActionError(null)
     setActionSuccess(null)
+    setSnapshot((prev) => (prev ? { ...prev, detections: null, failures: null } : null))
     try {
       const res = await client.startSimulation(options)
-      setActionSuccess(res.message || 'Simulation started.')
+      if (res && res.status === 'error') {
+        setActionError(res.message || 'Failed to start simulation.')
+        setSnapshot(null)
+      } else {
+        setActionSuccess(res.message || 'Simulation started.')
+      }
       setRefreshKey((k) => k + 1)
+      return res
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to start simulation.')
     } finally {

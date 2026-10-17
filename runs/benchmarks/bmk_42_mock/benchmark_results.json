@@ -1,0 +1,500 @@
+{
+  "benchmark_id": "bmk_42_01f4104c",
+  "timestamp": "2026-10-16T09:42:06.222199+00:00",
+  "seed": 42,
+  "backend": "mock",
+  "backend_disclosure": "Mock synthetic simulation (offline, no live CARLA server used)",
+  "budget": {
+    "scenario_count": 3,
+    "max_frames_per_scenario": 10,
+    "duration_seconds": 15.0,
+    "iou_threshold": 0.5,
+    "parameter_bounds": {
+      "weather.fog_density": [
+        0.0,
+        100.0
+      ],
+      "weather.precipitation": [
+        0.0,
+        100.0
+      ],
+      "weather.cloudiness": [
+        0.0,
+        100.0
+      ],
+      "weather.sun_altitude_angle": [
+        -15.0,
+        85.0
+      ],
+      "weather.sun_azimuth_angle": [
+        0.0,
+        360.0
+      ],
+      "weather.wetness": [
+        0.0,
+        100.0
+      ],
+      "weather.wind_intensity": [
+        0.0,
+        100.0
+      ],
+      "actor_configuration.target_count": [
+        1.0,
+        5.0
+      ]
+    },
+    "supported_maps": [
+      "Town01",
+      "Town02",
+      "Town03"
+    ]
+  },
+  "comparison": {
+    "completed_budget_matched": true,
+    "guided_completed": 3,
+    "random_completed": 3,
+    "guided_unique_signatures": 6,
+    "random_unique_signatures": 11,
+    "unique_signatures_delta": -5,
+    "guided_f1": 0.7902,
+    "random_f1": 0.7563,
+    "f1_delta": 0.0339,
+    "guided_precision": 0.9529,
+    "random_precision": 0.9184,
+    "guided_recall": 0.675,
+    "random_recall": 0.6429,
+    "guided_critical_failures": 0,
+    "random_critical_failures": 0,
+    "guided_coverage_ratio": 0.1905,
+    "random_coverage_ratio": 0.3692,
+    "verdict": "Equal or comparable failure discovery observed"
+  },
+  "strategies": {
+    "failure_guided": {
+      "strategy_name": "failure_guided",
+      "attempted_scenarios": 3,
+      "completed_scenarios": 3,
+      "failed_scenarios": 0,
+      "total_frames": 30,
+      "total_sim_time_s": 3.000000000000001,
+      "total_tp": 81,
+      "total_fp": 4,
+      "total_fn": 39,
+      "precision": 0.9529411764705882,
+      "recall": 0.675,
+      "f1": 0.7902439024390243,
+      "matched_iou": 0.9537825541618634,
+      "unique_failure_signatures_count": 6,
+      "unique_signatures": [
+        "false_positive:car:medium:fog_clear_light_rain_low_sun",
+        "low_confidence:car:medium:fog_clear_light_rain_low_sun",
+        "missed_detection:bicycle:high:fog_clear_light_rain_low_sun",
+        "missed_detection:bicycle:high:fog_mod_light_rain_low_sun",
+        "missed_detection:car:high:fog_clear_light_rain_low_sun",
+        "missed_detection:car:high:fog_mod_light_rain_low_sun"
+      ],
+      "failures_by_type": {
+        "missed_detection": 39,
+        "false_positive": 4,
+        "low_confidence": 4
+      },
+      "failures_by_severity": {
+        "high": 39,
+        "medium": 8
+      },
+      "coverage_summary": {
+        "total_runs": 3,
+        "total_failures": 47,
+        "overall_coverage_ratio": 0.1905,
+        "tested_scenarios": [
+          "nextbest_scen_001_07372a",
+          "nextbest_scen_007_e9cf87",
+          "nextbest_scen_011_6ef906"
+        ],
+        "scenario_run_counts": {
+          "nextbest_scen_007_e9cf87": 1,
+          "nextbest_scen_001_07372a": 1,
+          "nextbest_scen_011_6ef906": 1
+        },
+        "failures_by_type": {
+          "missed_detection": 39,
+          "false_positive": 4,
+          "low_confidence": 4
+        },
+        "failures_by_severity": {
+          "high": 39,
+          "medium": 8
+        },
+        "condition_coverage": {
+          "traffic.bicycles": {
+            "min": 0.0,
+            "max": 1.0,
+            "distinct_count": 2
+          },
+          "traffic.pedestrians": {
+            "min": 0.0,
+            "max": 2.0,
+            "distinct_count": 2
+          },
+          "traffic.vehicles": {
+            "min": 2.0,
+            "max": 6.0,
+            "distinct_count": 3
+          },
+          "weather.cloudiness": {
+            "min": 16.29,
+            "max": 54.98,
+            "distinct_count": 3
+          },
+          "weather.fog_density": {
+            "min": 12.84,
+            "max": 26.69,
+            "distinct_count": 3
+          },
+          "weather.fog_distance": {
+            "min": 20.5,
+            "max": 44.98,
+            "distinct_count": 3
+          },
+          "weather.precipitation": {
+            "min": 29.07,
+            "max": 47.53,
+            "distinct_count": 3
+          },
+          "weather.precipitation_deposits": {
+            "min": 26.16,
+            "max": 42.78,
+            "distinct_count": 3
+          },
+          "weather.sun_altitude_angle": {
+            "min": 6.77,
+            "max": 11.51,
+            "distinct_count": 3
+          },
+          "weather.sun_azimuth_angle": {
+            "min": 249.26,
+            "max": 314.08,
+            "distinct_count": 3
+          },
+          "weather.wetness": {
+            "min": 27.6,
+            "max": 46.07,
+            "distinct_count": 3
+          },
+          "weather.wind_intensity": {
+            "min": 6.92,
+            "max": 28.07,
+            "distinct_count": 3
+          }
+        },
+        "parameter_coverage": {}
+      },
+      "runs": [
+        {
+          "strategy": "failure_guided",
+          "run_id": "run_1a4aab834a0e",
+          "candidate_id": "cand_011_6ef906",
+          "scenario_id": "nextbest_scen_011_6ef906",
+          "status": "completed",
+          "map_name": "Town02",
+          "weather_preset": "MidRainSunset",
+          "fog_density": 12.84,
+          "precipitation": 47.53,
+          "sun_altitude_angle": 11.51,
+          "traffic_vehicles": 4,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 29,
+          "fp": 2,
+          "fn": 11,
+          "precision": 0.9354838709677419,
+          "recall": 0.725,
+          "f1": 0.8169014084507041,
+          "matched_iou": 0.9519070334170333,
+          "failure_count": 15,
+          "unique_signatures_count": 4,
+          "unique_signatures": [
+            "false_positive:car:medium:fog_clear_light_rain_low_sun",
+            "low_confidence:car:medium:fog_clear_light_rain_low_sun",
+            "missed_detection:bicycle:high:fog_clear_light_rain_low_sun",
+            "missed_detection:car:high:fog_clear_light_rain_low_sun"
+          ]
+        },
+        {
+          "strategy": "failure_guided",
+          "run_id": "run_1f03af9e9451",
+          "candidate_id": "cand_001_07372a",
+          "scenario_id": "nextbest_scen_001_07372a",
+          "status": "completed",
+          "map_name": "Town03",
+          "weather_preset": "ClearSunrise",
+          "fog_density": 14.53,
+          "precipitation": 34.95,
+          "sun_altitude_angle": 9.59,
+          "traffic_vehicles": 6,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 30,
+          "fp": 2,
+          "fn": 20,
+          "precision": 0.9375,
+          "recall": 0.6,
+          "f1": 0.7317073170731707,
+          "matched_iou": 0.9561193557568102,
+          "failure_count": 24,
+          "unique_signatures_count": 4,
+          "unique_signatures": [
+            "false_positive:car:medium:fog_clear_light_rain_low_sun",
+            "low_confidence:car:medium:fog_clear_light_rain_low_sun",
+            "missed_detection:bicycle:high:fog_clear_light_rain_low_sun",
+            "missed_detection:car:high:fog_clear_light_rain_low_sun"
+          ]
+        },
+        {
+          "strategy": "failure_guided",
+          "run_id": "run_9989099911a6",
+          "candidate_id": "cand_007_e9cf87",
+          "scenario_id": "nextbest_scen_007_e9cf87",
+          "status": "completed",
+          "map_name": "Town01",
+          "weather_preset": "ClearSunrise",
+          "fog_density": 26.69,
+          "precipitation": 29.07,
+          "sun_altitude_angle": 6.77,
+          "traffic_vehicles": 2,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 22,
+          "fp": 0,
+          "fn": 8,
+          "precision": 1.0,
+          "recall": 0.7333333333333333,
+          "f1": 0.846153846153846,
+          "matched_iou": 0.9530682838778485,
+          "failure_count": 8,
+          "unique_signatures_count": 2,
+          "unique_signatures": [
+            "missed_detection:bicycle:high:fog_mod_light_rain_low_sun",
+            "missed_detection:car:high:fog_mod_light_rain_low_sun"
+          ]
+        }
+      ]
+    },
+    "random_baseline": {
+      "strategy_name": "random_baseline",
+      "attempted_scenarios": 3,
+      "completed_scenarios": 3,
+      "failed_scenarios": 0,
+      "total_frames": 30,
+      "total_sim_time_s": 3.000000000000001,
+      "total_tp": 45,
+      "total_fp": 4,
+      "total_fn": 25,
+      "precision": 0.9183673469387755,
+      "recall": 0.6428571428571429,
+      "f1": 0.7563025210084034,
+      "matched_iou": 0.9520450908919668,
+      "unique_failure_signatures_count": 11,
+      "unique_signatures": [
+        "false_positive:car:medium:fog_clear_light_rain_low_sun",
+        "false_positive:car:medium:fog_dense_dry_low_sun",
+        "false_positive:car:medium:fog_mod_dry_day",
+        "low_confidence:car:medium:fog_clear_light_rain_low_sun",
+        "low_confidence:car:medium:fog_dense_dry_low_sun",
+        "low_confidence:car:medium:fog_mod_dry_day",
+        "missed_detection:bicycle:high:fog_clear_light_rain_low_sun",
+        "missed_detection:bicycle:high:fog_dense_dry_low_sun",
+        "missed_detection:bicycle:high:fog_mod_dry_day",
+        "missed_detection:car:high:fog_clear_light_rain_low_sun",
+        "missed_detection:car:high:fog_mod_dry_day"
+      ],
+      "failures_by_type": {
+        "missed_detection": 25,
+        "false_positive": 4,
+        "low_confidence": 4
+      },
+      "failures_by_severity": {
+        "high": 25,
+        "medium": 8
+      },
+      "coverage_summary": {
+        "total_runs": 3,
+        "total_failures": 33,
+        "overall_coverage_ratio": 0.3692,
+        "tested_scenarios": [
+          "random_scen_001_05339a",
+          "random_scen_002_65e976",
+          "random_scen_003_8329ea"
+        ],
+        "scenario_run_counts": {
+          "random_scen_003_8329ea": 1,
+          "random_scen_002_65e976": 1,
+          "random_scen_001_05339a": 1
+        },
+        "failures_by_type": {
+          "missed_detection": 25,
+          "false_positive": 4,
+          "low_confidence": 4
+        },
+        "failures_by_severity": {
+          "high": 25,
+          "medium": 8
+        },
+        "condition_coverage": {
+          "traffic.bicycles": {
+            "min": 0.0,
+            "max": 1.0,
+            "distinct_count": 2
+          },
+          "traffic.pedestrians": {
+            "min": 0.0,
+            "max": 1.0,
+            "distinct_count": 2
+          },
+          "traffic.vehicles": {
+            "min": 1.0,
+            "max": 3.0,
+            "distinct_count": 3
+          },
+          "weather.cloudiness": {
+            "min": 19.88376506866485,
+            "max": 35.89793804846284,
+            "distinct_count": 3
+          },
+          "weather.fog_density": {
+            "min": 10.22102765198487,
+            "max": 63.942679845788376,
+            "distinct_count": 3
+          },
+          "weather.fog_distance": {
+            "min": 0.0,
+            "max": 0.0,
+            "distinct_count": 1
+          },
+          "weather.precipitation": {
+            "min": 2.5010755222666936,
+            "max": 37.99273006373374,
+            "distinct_count": 3
+          },
+          "weather.precipitation_deposits": {
+            "min": 2.3568618012516485,
+            "max": 31.054504430637753,
+            "distinct_count": 3
+          },
+          "weather.sun_altitude_angle": {
+            "min": 7.321073814882276,
+            "max": 49.98844377795233,
+            "distinct_count": 3
+          },
+          "weather.sun_azimuth_angle": {
+            "min": 95.2275121999247,
+            "max": 265.1296370990445,
+            "distinct_count": 3
+          },
+          "weather.wetness": {
+            "min": 2.3568618012516485,
+            "max": 31.054504430637753,
+            "distinct_count": 3
+          },
+          "weather.wind_intensity": {
+            "min": 36.7539903737474,
+            "max": 71.37436541638763,
+            "distinct_count": 3
+          }
+        },
+        "parameter_coverage": {}
+      },
+      "runs": [
+        {
+          "strategy": "random_baseline",
+          "run_id": "run_7433afff57a4",
+          "candidate_id": "random_cand_001_05339a",
+          "scenario_id": "random_scen_001_05339a",
+          "status": "completed",
+          "map_name": "Town02",
+          "weather_preset": "ClearSunrise",
+          "fog_density": 63.942679845788376,
+          "precipitation": 2.5010755222666936,
+          "sun_altitude_angle": 7.321073814882276,
+          "traffic_vehicles": 1,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 3,
+          "fp": 1,
+          "fn": 7,
+          "precision": 0.75,
+          "recall": 0.3,
+          "f1": 0.4285714285714285,
+          "matched_iou": 0.9159371904473795,
+          "failure_count": 9,
+          "unique_signatures_count": 3,
+          "unique_signatures": [
+            "false_positive:car:medium:fog_dense_dry_low_sun",
+            "low_confidence:car:medium:fog_dense_dry_low_sun",
+            "missed_detection:bicycle:high:fog_dense_dry_low_sun"
+          ]
+        },
+        {
+          "strategy": "random_baseline",
+          "run_id": "run_024e681b9728",
+          "candidate_id": "random_cand_002_65e976",
+          "scenario_id": "random_scen_002_65e976",
+          "status": "completed",
+          "map_name": "Town03",
+          "weather_preset": "ClearNoon",
+          "fog_density": 50.53552881033624,
+          "precipitation": 2.6535969683863625,
+          "sun_altitude_angle": 49.98844377795233,
+          "traffic_vehicles": 2,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 19,
+          "fp": 2,
+          "fn": 11,
+          "precision": 0.9047619047619048,
+          "recall": 0.6333333333333333,
+          "f1": 0.7450980392156863,
+          "matched_iou": 0.9468760128996078,
+          "failure_count": 15,
+          "unique_signatures_count": 4,
+          "unique_signatures": [
+            "false_positive:car:medium:fog_mod_dry_day",
+            "low_confidence:car:medium:fog_mod_dry_day",
+            "missed_detection:bicycle:high:fog_mod_dry_day",
+            "missed_detection:car:high:fog_mod_dry_day"
+          ]
+        },
+        {
+          "strategy": "random_baseline",
+          "run_id": "run_3c2f7f43530e",
+          "candidate_id": "random_cand_003_8329ea",
+          "scenario_id": "random_scen_003_8329ea",
+          "status": "completed",
+          "map_name": "Town01",
+          "weather_preset": "SoftRainSunset",
+          "fog_density": 10.22102765198487,
+          "precipitation": 37.99273006373374,
+          "sun_altitude_angle": 19.395572247897107,
+          "traffic_vehicles": 3,
+          "frames": 10,
+          "sim_time_s": 1.0000000000000002,
+          "tp": 23,
+          "fp": 1,
+          "fn": 7,
+          "precision": 0.9583333333333334,
+          "recall": 0.7666666666666667,
+          "f1": 0.8518518518518519,
+          "matched_iou": 0.9610249249436442,
+          "failure_count": 9,
+          "unique_signatures_count": 4,
+          "unique_signatures": [
+            "false_positive:car:medium:fog_clear_light_rain_low_sun",
+            "low_confidence:car:medium:fog_clear_light_rain_low_sun",
+            "missed_detection:bicycle:high:fog_clear_light_rain_low_sun",
+            "missed_detection:car:high:fog_clear_light_rain_low_sun"
+          ]
+        }
+      ]
+    }
+  }
+}

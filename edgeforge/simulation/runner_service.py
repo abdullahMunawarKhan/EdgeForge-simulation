@@ -108,6 +108,7 @@ class SimulationService:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._active_runner: Optional[ScenarioRunner] = None
+        self._startup_error: Optional[str] = None
         self._lock = threading.RLock()
         self._current_config: Dict[str, Any] = {
             "weather": {
@@ -201,6 +202,7 @@ class SimulationService:
                 }
 
             self._stop_event.clear()
+            self._startup_error = None
             base_cfg = _load_base_scenario(scenario_path)
 
             if scenario_config:
@@ -228,7 +230,28 @@ class SimulationService:
             st = self.runtime.status()
             if st.get("status") in ("running", "starting"):
                 break
-            sleep(0.05)
+            if self._startup_error is not None or st.get("status") == "error":
+                break
+            with self._lock:
+                if self._thread is None or not self._thread.is_alive():
+                    break
+            sleep(0.02)
+
+        with self._lock:
+            thread_alive = self._thread is not None and self._thread.is_alive()
+            st = self.runtime.status()
+            if self._startup_error is not None or st.get("status") == "error" or not thread_alive:
+                err = (
+                    self._startup_error
+                    or st.get("message")
+                    or f"Simulation failed to start [{backend} backend]."
+                )
+                return {
+                    "status": "error",
+                    "backend": backend,
+                    "message": err,
+                    "configuration": response_config,
+                }
 
         return {
             "status": "started",
@@ -297,6 +320,11 @@ class SimulationService:
             with self._lock:
                 active_config = deepcopy(self._current_config)
             scenario_conditions.update(active_config)
+
+            if runner.backend == "carla":
+                logger.info("Initializing CARLA simulation...")
+                runner.start()
+
             self.runtime.start(runner.backend, scenario_conditions)
 
             logger.info(f"🚀 SimulationService loop started [backend={runner.backend}].")
@@ -447,56 +475,64 @@ class SimulationService:
                     )
             completed = True
         except Exception as exc:
+            error_msg = f"Simulation failed [{backend}]: {exc}"
+            self._startup_error = error_msg
             logger.error(f"Error in SimulationService loop: {exc}", exc_info=True)
+            self.runtime.stop(
+                message=error_msg,
+                status="error",
+                backend=backend,
+            )
         finally:
-            if completed and runner is not None and (
-                frame_metrics or runner.backend == BACKEND_MOCK
-            ):
-                try:
-                    run_metrics = aggregate_run_metrics(
-                        frame_metrics,
-                        scenario_id=str(scenario_conditions["scenario_id"]),
-                        run_id=run_id,
-                        scenario_conditions=scenario_conditions,
-                        parameters={
-                            "backend": backend,
-                            "scenario_config": config,
-                        },
-                    )
-                    if runner.backend == BACKEND_MOCK:
-                        risk_config = config.get("risk_analysis", {})
-                        threshold = (
-                            risk_config.get("threshold", settings.RISK_THRESHOLD)
-                            if isinstance(risk_config, Mapping)
-                            else settings.RISK_THRESHOLD
-                        )
-                        scenario_result = ScenarioResult(
-                            scenario_name=str(
-                                scenario_conditions.get("scenario_name")
-                                or scenario_conditions["scenario_id"]
-                            ),
+            if not self._startup_error:
+                if completed and runner is not None and (
+                    frame_metrics or runner.backend == BACKEND_MOCK
+                ):
+                    try:
+                        run_metrics = aggregate_run_metrics(
+                            frame_metrics,
+                            scenario_id=str(scenario_conditions["scenario_id"]),
                             run_id=run_id,
-                            success=True,
-                            exit_status="completed",
-                            duration_s=(
-                                max(frame_timestamps) - min(frame_timestamps)
-                                if frame_timestamps
-                                else 0.0
-                            ),
-                            events=scenario_events,
+                            scenario_conditions=scenario_conditions,
+                            parameters={
+                                "backend": backend,
+                                "scenario_config": config,
+                            },
                         )
-                        scenario_metrics = ScenarioEvaluator(
-                            risk_threshold=float(threshold),
-                        ).evaluate(scenario_result, risk_samples)
-                        self.history_store.save_run(
-                            run_metrics,
-                            scenario_metrics=scenario_metrics,
-                        )
-                    else:
-                        self.history_store.save_run(run_metrics)
-                except Exception:
-                    logger.exception("Could not persist completed simulation history.")
-            self.runtime.stop()
+                        if runner.backend == BACKEND_MOCK:
+                            risk_config = config.get("risk_analysis", {})
+                            threshold = (
+                                risk_config.get("threshold", settings.RISK_THRESHOLD)
+                                if isinstance(risk_config, Mapping)
+                                else settings.RISK_THRESHOLD
+                            )
+                            scenario_result = ScenarioResult(
+                                scenario_name=str(
+                                    scenario_conditions.get("scenario_name")
+                                    or scenario_conditions["scenario_id"]
+                                ),
+                                run_id=run_id,
+                                success=True,
+                                exit_status="completed",
+                                duration_s=(
+                                    max(frame_timestamps) - min(frame_timestamps)
+                                    if frame_timestamps
+                                    else 0.0
+                                ),
+                                events=scenario_events,
+                            )
+                            scenario_metrics = ScenarioEvaluator(
+                                risk_threshold=float(threshold),
+                            ).evaluate(scenario_result, risk_samples)
+                            self.history_store.save_run(
+                                run_metrics,
+                                scenario_metrics=scenario_metrics,
+                            )
+                        else:
+                            self.history_store.save_run(run_metrics)
+                    except Exception:
+                        logger.exception("Could not persist completed simulation history.")
+                self.runtime.stop()
             with self._lock:
                 self._active_runner = None
                 if self._thread is threading.current_thread():

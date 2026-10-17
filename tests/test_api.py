@@ -1201,3 +1201,18 @@ def test_simulation_configuration_endpoints() -> None:
     assert config_data["weather"]["precipitation"] == 45.0
     assert config_data["lighting"] == "Night"
     assert config_data["traffic_density"] == "High"
+
+
+def test_start_simulation_carla_unavailable_reports_error() -> None:
+    # Attempting to start with CARLA backend when no server is running
+    response = client.post("/api/v1/simulation/start", json={"backend": "carla"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "error"
+    assert data["backend"] == "carla"
+    assert "Simulation failed [carla]" in data["message"]
+
+    # Ensure it did not silently fall back to mock
+    st = client.get("/api/v1/simulation/status").json()
+    assert st.get("is_running") is False
+    assert st.get("status") in ("error", "disconnected")

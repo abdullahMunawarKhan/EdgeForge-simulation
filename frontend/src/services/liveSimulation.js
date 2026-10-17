@@ -185,7 +185,11 @@ export function getSimulationStatusLabel(status) {
 
 export function formatValue(value, suffix = '') {
   if (value === null || value === undefined || value === '') return 'Unavailable'
-  if (typeof value === 'number' && !Number.isFinite(value)) return 'Unavailable'
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 'Unavailable'
+    const formatted = Number.isInteger(value) ? value : Number(value.toFixed(1))
+    return `${formatted}${suffix}`
+  }
   return `${value}${suffix}`
 }
 

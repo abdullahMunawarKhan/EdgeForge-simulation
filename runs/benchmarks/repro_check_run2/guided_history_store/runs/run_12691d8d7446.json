@@ -1,0 +1,41 @@
+{
+  "f1": 0.6486486486486487,
+  "failure_count": 50,
+  "false_positives": 0,
+  "frames_processed": 10,
+  "ground_truth_objects": 50,
+  "iou_threshold": 0.5,
+  "matched_iou": 0.8768429814027856,
+  "metadata": {},
+  "missed_detections": 26,
+  "parameters": {
+    "backend": "mock",
+    "candidate_id": "cand_001_d2447c"
+  },
+  "precision": 1.0,
+  "predictions": 24,
+  "recall": 0.48,
+  "run_id": "run_12691d8d7446",
+  "scenario_conditions": {
+    "map": "Town02",
+    "traffic": {
+      "bicycles": 1,
+      "pedestrians": 2,
+      "vehicles": 5
+    },
+    "weather": {
+      "cloudiness": 29.81,
+      "fog_density": 74.55,
+      "fog_distance": 3.19,
+      "precipitation": 54.62,
+      "precipitation_deposits": 49.16,
+      "sun_altitude_angle": 60.28,
+      "sun_azimuth_angle": 43.36,
+      "wetness": 46.59,
+      "wind_intensity": 77.4
+    }
+  },
+  "scenario_id": "nextbest_scen_001_d2447c",
+  "timestamp": "2026-10-16T09:59:04.950229+00:00",
+  "true_positives": 24
+}

@@ -1,0 +1,312 @@
+{
+  "cold_start": true,
+  "generated_at": "2026-10-16T08:45:25.343725+00:00",
+  "generator_version": "1.0",
+  "recommendations": [
+    {
+      "candidate_id": "cand_001_0a266a",
+      "cold_start": true,
+      "historical_evidence": [],
+      "novelty_explanation": "fog_density explores unbenchmarked baseline space (no prior runs); precipitation explores unbenchmarked baseline space; low sun altitude (14.9 deg) tests low-angle glare",
+      "overall_score": 0.9775,
+      "scenario_conditions": {
+        "actor_configuration": {
+          "ego_spawn_index": 2,
+          "target_count": 2,
+          "target_types": [
+            "pedestrian",
+            "truck"
+          ]
+        },
+        "fixed_delta_seconds": 0.05,
+        "lighting": {
+          "sun_altitude_angle": 14.86,
+          "sun_azimuth_angle": 132.63
+        },
+        "map": "Town01",
+        "weather": {
+          "cloudiness": 82.52,
+          "fog_density": 41.66,
+          "fog_distance": 31.36,
+          "precipitation": 1.02,
+          "precipitation_deposits": 0.92,
+          "sun_altitude_angle": 14.86,
+          "sun_azimuth_angle": 132.63,
+          "wetness": 0.89,
+          "wind_intensity": 45.28
+        }
+      },
+      "scenario_config": {
+        "description": "Generated scenario (CloudySunset, fog=41.7)",
+        "duration_seconds": 30.0,
+        "ego_vehicle": {
+          "autopilot": false,
+          "model": "vehicle.tesla.model3",
+          "spawn_point_index": 2,
+          "speed_limit": 50
+        },
+        "generated_metadata": {
+          "candidate_id": "cand_001_0a266a",
+          "fine_weather": {
+            "cloudiness": 82.52,
+            "fog_density": 41.66,
+            "fog_distance": 31.36,
+            "precipitation": 1.02,
+            "precipitation_deposits": 0.92,
+            "sun_altitude_angle": 14.86,
+            "sun_azimuth_angle": 132.63,
+            "wetness": 0.89,
+            "wind_intensity": 45.28
+          },
+          "unsupported_features": []
+        },
+        "map": "Town01",
+        "name": "nextbest_scen_001_0a266a",
+        "sensors": {
+          "collision": {
+            "enabled": true
+          },
+          "lane_invasion": {
+            "enabled": true
+          },
+          "rgb_camera": {
+            "enabled": true,
+            "fov": 90,
+            "height": 720,
+            "tick": 0.05,
+            "width": 1280
+          }
+        },
+        "simulation": {
+          "backend": "carla"
+        },
+        "traffic": {
+          "bicycles": 0,
+          "pedestrians": 1,
+          "vehicles": 5
+        },
+        "version": "1.0",
+        "weather": "CloudySunset"
+      },
+      "scenario_id": "nextbest_scen_001_0a266a",
+      "score_breakdown": {
+        "condition_similarity": 0.0,
+        "coverage_novelty": 0.9775,
+        "failure_evidence": 0.0,
+        "feasibility": 1.0
+      },
+      "selection_reason": "Selected in cold-start mode (no prior historical runs). Prioritizes coverage novelty (0.98) across Town01 with CloudySunset preset (fog=41.7, precip=1.0) to establish baseline detection performance.",
+      "unsupported_features": [],
+      "weights": {
+        "condition_similarity": 0.15,
+        "coverage_novelty": 0.4,
+        "failure_evidence": 0.45
+      }
+    },
+    {
+      "candidate_id": "cand_003_169bc7",
+      "cold_start": true,
+      "historical_evidence": [],
+      "novelty_explanation": "fog_density explores unbenchmarked baseline space (no prior runs); precipitation explores unbenchmarked baseline space",
+      "overall_score": 0.91,
+      "scenario_conditions": {
+        "actor_configuration": {
+          "ego_spawn_index": 5,
+          "target_count": 2,
+          "target_types": [
+            "pedestrian"
+          ]
+        },
+        "fixed_delta_seconds": 0.05,
+        "lighting": {
+          "sun_altitude_angle": 62.08,
+          "sun_azimuth_angle": 64.39
+        },
+        "map": "Town02",
+        "weather": {
+          "cloudiness": 87.08,
+          "fog_density": 0.35,
+          "fog_distance": 40.36,
+          "precipitation": 94.02,
+          "precipitation_deposits": 84.62,
+          "sun_altitude_angle": 62.08,
+          "sun_azimuth_angle": 64.39,
+          "wetness": 78.96,
+          "wind_intensity": 33.16
+        }
+      },
+      "scenario_config": {
+        "description": "Generated scenario (HardRainNoon, fog=0.3)",
+        "duration_seconds": 30.0,
+        "ego_vehicle": {
+          "autopilot": false,
+          "model": "vehicle.tesla.model3",
+          "spawn_point_index": 5,
+          "speed_limit": 50
+        },
+        "generated_metadata": {
+          "candidate_id": "cand_003_169bc7",
+          "fine_weather": {
+            "cloudiness": 87.08,
+            "fog_density": 0.35,
+            "fog_distance": 40.36,
+            "precipitation": 94.02,
+            "precipitation_deposits": 84.62,
+            "sun_altitude_angle": 62.08,
+            "sun_azimuth_angle": 64.39,
+            "wetness": 78.96,
+            "wind_intensity": 33.16
+          },
+          "unsupported_features": []
+        },
+        "map": "Town02",
+        "name": "nextbest_scen_003_169bc7",
+        "sensors": {
+          "collision": {
+            "enabled": true
+          },
+          "lane_invasion": {
+            "enabled": true
+          },
+          "rgb_camera": {
+            "enabled": true,
+            "fov": 90,
+            "height": 720,
+            "tick": 0.05,
+            "width": 1280
+          }
+        },
+        "simulation": {
+          "backend": "carla"
+        },
+        "traffic": {
+          "bicycles": 0,
+          "pedestrians": 0,
+          "vehicles": 2
+        },
+        "version": "1.0",
+        "weather": "HardRainNoon"
+      },
+      "scenario_id": "nextbest_scen_003_169bc7",
+      "score_breakdown": {
+        "condition_similarity": 0.0,
+        "coverage_novelty": 0.91,
+        "failure_evidence": 0.0,
+        "feasibility": 1.0
+      },
+      "selection_reason": "Selected in cold-start mode (no prior historical runs). Prioritizes coverage novelty (0.91) across Town02 with HardRainNoon preset (fog=0.3, precip=94.0) to establish baseline detection performance.",
+      "unsupported_features": [],
+      "weights": {
+        "condition_similarity": 0.15,
+        "coverage_novelty": 0.4,
+        "failure_evidence": 0.45
+      }
+    },
+    {
+      "candidate_id": "cand_002_7848ce",
+      "cold_start": true,
+      "historical_evidence": [],
+      "novelty_explanation": "fog_density explores unbenchmarked baseline space (no prior runs); precipitation explores unbenchmarked baseline space",
+      "overall_score": 0.91,
+      "scenario_conditions": {
+        "actor_configuration": {
+          "ego_spawn_index": 1,
+          "target_count": 1,
+          "target_types": [
+            "bicycle",
+            "car"
+          ]
+        },
+        "fixed_delta_seconds": 0.05,
+        "lighting": {
+          "sun_altitude_angle": 82.86,
+          "sun_azimuth_angle": 148.36
+        },
+        "map": "Town02",
+        "weather": {
+          "cloudiness": 9.13,
+          "fog_density": 35.49,
+          "fog_distance": 16.98,
+          "precipitation": 95.81,
+          "precipitation_deposits": 86.23,
+          "sun_altitude_angle": 82.86,
+          "sun_azimuth_angle": 148.36,
+          "wetness": 95.96,
+          "wind_intensity": 11.85
+        }
+      },
+      "scenario_config": {
+        "description": "Generated scenario (HardRainNoon, fog=35.5)",
+        "duration_seconds": 30.0,
+        "ego_vehicle": {
+          "autopilot": false,
+          "model": "vehicle.tesla.model3",
+          "spawn_point_index": 1,
+          "speed_limit": 50
+        },
+        "generated_metadata": {
+          "candidate_id": "cand_002_7848ce",
+          "fine_weather": {
+            "cloudiness": 9.13,
+            "fog_density": 35.49,
+            "fog_distance": 16.98,
+            "precipitation": 95.81,
+            "precipitation_deposits": 86.23,
+            "sun_altitude_angle": 82.86,
+            "sun_azimuth_angle": 148.36,
+            "wetness": 95.96,
+            "wind_intensity": 11.85
+          },
+          "unsupported_features": []
+        },
+        "map": "Town02",
+        "name": "nextbest_scen_002_7848ce",
+        "sensors": {
+          "collision": {
+            "enabled": true
+          },
+          "lane_invasion": {
+            "enabled": true
+          },
+          "rgb_camera": {
+            "enabled": true,
+            "fov": 90,
+            "height": 720,
+            "tick": 0.05,
+            "width": 1280
+          }
+        },
+        "simulation": {
+          "backend": "carla"
+        },
+        "traffic": {
+          "bicycles": 1,
+          "pedestrians": 3,
+          "vehicles": 5
+        },
+        "version": "1.0",
+        "weather": "HardRainNoon"
+      },
+      "scenario_id": "nextbest_scen_002_7848ce",
+      "score_breakdown": {
+        "condition_similarity": 0.0,
+        "coverage_novelty": 0.91,
+        "failure_evidence": 0.0,
+        "feasibility": 1.0
+      },
+      "selection_reason": "Selected in cold-start mode (no prior historical runs). Prioritizes coverage novelty (0.91) across Town02 with HardRainNoon preset (fog=35.5, precip=95.8) to establish baseline detection performance.",
+      "unsupported_features": [],
+      "weights": {
+        "condition_similarity": 0.15,
+        "coverage_novelty": 0.4,
+        "failure_evidence": 0.45
+      }
+    }
+  ],
+  "total_ranked": 3,
+  "weights": {
+    "condition_similarity": 0.15,
+    "coverage_novelty": 0.4,
+    "failure_evidence": 0.45
+  }
+}

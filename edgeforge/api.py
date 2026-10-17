@@ -199,7 +199,12 @@ class SimulationRuntime:
                                 camera_name,
                             )
 
-    def stop(self, message: str = "Simulation pipeline is not running.") -> None:
+    def stop(
+        self,
+        message: str = "Simulation pipeline is not running.",
+        status: str = "disconnected",
+        backend: str | None = None,
+    ) -> None:
         with self._camera_lock:
             self._camera_generation += 1
             self._active_cameras.clear()
@@ -217,9 +222,12 @@ class SimulationRuntime:
             except queue.Empty:
                 pass
         with self._lock:
-            self._status = "disconnected"
+            self._status = status
             self._message = message
             self._snapshot = deepcopy(_DEFAULT_SNAPSHOT)
+            self._snapshot["simulation_status"] = status
+            if backend is not None:
+                self._snapshot["backend"] = backend
             self._updated_at = datetime.now(timezone.utc).isoformat()
             self._version += 1
 

@@ -1,0 +1,36 @@
+{
+  "runs": {
+    "run_024e681b9728": {
+      "f1": 0.7450980392156863,
+      "failure_count": 15,
+      "matched_iou": 0.9468760128996078,
+      "precision": 0.9047619047619048,
+      "recall": 0.6333333333333333,
+      "run_id": "run_024e681b9728",
+      "scenario_id": "random_scen_002_65e976",
+      "timestamp": "2026-10-16T09:42:05.599264+00:00"
+    },
+    "run_3c2f7f43530e": {
+      "f1": 0.8518518518518519,
+      "failure_count": 9,
+      "matched_iou": 0.9610249249436442,
+      "precision": 0.9583333333333334,
+      "recall": 0.7666666666666667,
+      "run_id": "run_3c2f7f43530e",
+      "scenario_id": "random_scen_003_8329ea",
+      "timestamp": "2026-10-16T09:42:06.114515+00:00"
+    },
+    "run_7433afff57a4": {
+      "f1": 0.4285714285714285,
+      "failure_count": 9,
+      "matched_iou": 0.9159371904473795,
+      "precision": 0.75,
+      "recall": 0.3,
+      "run_id": "run_7433afff57a4",
+      "scenario_id": "random_scen_001_05339a",
+      "timestamp": "2026-10-16T09:42:05.093292+00:00"
+    }
+  },
+  "updated_at": "2026-10-16T09:42:06.153988+00:00",
+  "version": "1.0"
+}

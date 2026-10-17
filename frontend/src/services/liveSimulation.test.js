@@ -6,6 +6,7 @@ import {
   createLiveSimulationClient,
   formatBox,
   formatConfidence,
+  formatValue,
 } from './liveSimulation.js'
 
 test('backend and WebSocket URLs use configured origin and preserve path prefix', () => {
@@ -124,11 +125,14 @@ test('live client reports network failures clearly', async () => {
   await assert.rejects(client.loadSnapshot(), /Cannot reach the EdgeForge backend/)
 })
 
-test('live values format missing confidence and malformed boxes as unavailable', () => {
+test('live values format missing confidence, malformed boxes, and floats cleanly', () => {
   assert.equal(formatConfidence(null), 'Unavailable')
   assert.equal(formatConfidence(0.875), '87.5%')
   assert.equal(formatBox([1.3, 2, 9, 10]), '1, 2, 9, 10')
   assert.equal(formatBox([1, 2, Number.NaN, 10]), 'Unavailable')
+  assert.equal(formatValue(240.00000000000006, ' m'), '240 m')
+  assert.equal(formatValue(224.34, ' m'), '224.3 m')
+  assert.equal(formatValue(null, ' m'), 'Unavailable')
 })
 
 test('live client can start and stop simulation via API', async () => {
@@ -156,11 +160,17 @@ test('live client can start and stop simulation via API', async () => {
   assert.equal(startRes.status, 'started')
   assert.equal(requests[0].method, 'POST')
   assert.equal(requests[0].pathname, '/api/v1/simulation/start')
+  assert.equal(requests[0].body.backend, 'mock')
+
+  const startCarlaRes = await client.startSimulation({ backend: 'carla' })
+  assert.equal(startCarlaRes.status, 'started')
+  assert.equal(requests[1].pathname, '/api/v1/simulation/start')
+  assert.equal(requests[1].body.backend, 'carla')
 
   const stopRes = await client.stopSimulation()
   assert.equal(stopRes.status, 'stopped')
-  assert.equal(requests[1].method, 'POST')
-  assert.equal(requests[1].pathname, '/api/v1/simulation/stop')
+  assert.equal(requests[2].method, 'POST')
+  assert.equal(requests[2].pathname, '/api/v1/simulation/stop')
 })
 
 test('live client can get and update configuration via API', async () => {

@@ -45,10 +45,13 @@ function ConnectionBadge({ connection }) {
   return <span className={`chip ${kind}`}>{label}</span>
 }
 
-function DataCard({ title, children, className = '' }) {
+function DataCard({ title, badge, children, className = '' }) {
   return (
     <section className={`panel min-w-0 p-4 sm:p-5 ${className}`}>
-      <h2 className="text-sm font-semibold">{title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {badge}
+      </div>
       <div className="mt-3">{children}</div>
     </section>
   )
@@ -78,6 +81,7 @@ function RiskBadge({ level }) {
 
 export function LiveSimulationPage({ onSwitchToStatic }) {
   const live = useLiveSimulation()
+  const [selectedBackend, setSelectedBackend] = useState('mock')
   const [scenarioConfiguration, setScenarioConfiguration] = useState(
     DEFAULT_SCENARIO_PREVIEW,
   )
@@ -97,6 +101,50 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
     live.status?.is_running === true ||
     (typeof simulationStatus === 'object' && simulationStatus?.status === 'running')
 
+  const activeBackend = snapshot.backend ?? live.status?.backend ?? null
+
+  const getPerceptionSourceBadge = () => {
+    if (!isRunning && !activeBackend) {
+      return {
+        label: 'IDLE — READY',
+        kind: 'chip',
+        description: 'Simulation is not currently active.',
+      }
+    }
+    const normalized = String(activeBackend || '').toLowerCase()
+    if (normalized === 'mock') {
+      return {
+        label: 'MOCK DATA — SYNTHETIC DETECTIONS',
+        kind: 'chip chip-warning font-semibold',
+        description: 'Using synthetic mock projections. YOLO inference is bypassed.',
+      }
+    }
+    if (normalized === 'carla') {
+      const hasInferenceConfirmed =
+        (detections && detections.length > 0) ||
+        (typeof snapshot.frame_id === 'number' && snapshot.frame_id > 0)
+      if (isRunning && hasInferenceConfirmed) {
+        return {
+          label: 'CARLA + YOLO — LIVE INFERENCE',
+          kind: 'chip chip-accent font-semibold',
+          description: 'Live CARLA RGB camera stream with real YOLOv8 object detections.',
+        }
+      }
+      return {
+        label: 'CARLA + YOLO — VERIFYING LIVE PIPELINE',
+        kind: 'chip chip-accent font-semibold animate-pulse',
+        description: 'Connecting to CARLA server and verifying live perception pipeline.',
+      }
+    }
+    return {
+      label: 'PERCEPTION STATUS UNKNOWN',
+      kind: 'chip',
+      description: '',
+    }
+  }
+
+  const sourceBadge = getPerceptionSourceBadge()
+
   const updateWeather = (key, value) => {
     setScenarioConfiguration((current) => ({
       ...current,
@@ -113,7 +161,7 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
 
   const handleStartSimulation = async () => {
     await live.startSimulation({
-      backend: 'mock',
+      backend: selectedBackend,
       scenario: scenarioConfiguration,
     })
   }
@@ -172,7 +220,7 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
           <div>
             <p className="text-sm font-medium">
               {live.connection.state === 'connected'
-                ? `Backend: ${getSimulationStatusLabel(simulationStatus)}`
+                ? `Backend: ${getSimulationStatusLabel(simulationStatus)}${activeBackend ? ` (${activeBackend.toUpperCase()})` : ''}`
                 : live.connection.state === 'connecting'
                   ? 'Checking backend availability…'
                   : 'Live simulation backend is disconnected'}
@@ -185,7 +233,36 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            {!isRunning ? (
+              <div className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg p-1 text-xs">
+                <button
+                  type="button"
+                  className={`px-3 py-1 font-medium rounded transition-colors ${
+                    selectedBackend === 'mock'
+                      ? 'bg-accent/20 text-accent font-semibold border border-accent/40'
+                      : 'text-text-muted hover:text-text'
+                  }`}
+                  onClick={() => setSelectedBackend('mock')}
+                  disabled={Boolean(live.actionLoading)}
+                >
+                  Mock Engine
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1 font-medium rounded transition-colors ${
+                    selectedBackend === 'carla'
+                      ? 'bg-accent/20 text-accent font-semibold border border-accent/40'
+                      : 'text-text-muted hover:text-text'
+                  }`}
+                  onClick={() => setSelectedBackend('carla')}
+                  disabled={Boolean(live.actionLoading)}
+                >
+                  CARLA Simulator
+                </button>
+              </div>
+            ) : null}
+
             {isRunning ? (
               <button
                 type="button"
@@ -202,7 +279,11 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
                 onClick={handleStartSimulation}
                 disabled={Boolean(live.actionLoading) || !live.backendConfigured}
               >
-                {live.actionLoading === 'start' ? 'Starting…' : '▶ Start Mock Simulation'}
+                {live.actionLoading === 'start'
+                  ? 'Starting…'
+                  : selectedBackend === 'carla'
+                    ? '▶ Start CARLA Simulation'
+                    : '▶ Start Mock Simulation'}
               </button>
             )}
 
@@ -410,10 +491,19 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
 
       {/* Live Detections & Scenario Conditions */}
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <DataCard title="Live Object Detections (Perception Pipeline)">
+        <DataCard
+          title="Live Object Detections (Perception Pipeline)"
+          badge={
+            <span className={sourceBadge.kind} title={sourceBadge.description}>
+              {sourceBadge.label}
+            </span>
+          }
+        >
           {detections === null ? (
             <p className="text-xs text-text-muted">
-              Detection data is not available in the backend response.
+              {activeBackend === 'carla' && isRunning
+                ? 'Verifying live CARLA perception pipeline… awaiting first frame detections.'
+                : 'Detection data is not available in the backend response.'}
             </p>
           ) : detections.length === 0 ? (
             <p className="text-xs text-text-muted">
