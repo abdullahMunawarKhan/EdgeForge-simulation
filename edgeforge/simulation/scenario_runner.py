@@ -26,7 +26,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import numpy as np
 
@@ -39,6 +39,9 @@ _GRANDPARENT = _THIS_DIR.parent.parent
 if str(_GRANDPARENT) not in sys.path:
     sys.path.insert(0, str(_GRANDPARENT))
 
+from edgeforge.config.settings import settings
+from edgeforge.data.models import DetectedObject
+from edgeforge.perception.validation import GroundTruthObject, extract_carla_ground_truth
 from edgeforge.simulation.actor_manager import ActorManager, EgoBundle, TrafficBundle
 from edgeforge.simulation.carla_client import CarlaClient, WorldSnapshot
 from edgeforge.simulation.mock_client import MockCarlaClient
@@ -134,7 +137,7 @@ def _advance_mock_actors(client: MockCarlaClient, dt: float) -> None:
             desired_kmh = max(desired_kmh, 30.0)
         target_ms = desired_kmh / 3.6
 
-        accel_target = (target_ms - st.speed_kmh / 3.6) / max(0.3, 2.0)
+        accel_target = (target_ms - st.speed_kmh / 3.6) / max(dt, 0.3)
         accel_target = max(-3.0, min(3.0, accel_target))
         st.ax = accel_target
         st.ay = 0.0
@@ -190,7 +193,9 @@ def _advance_mock_actors(client: MockCarlaClient, dt: float) -> None:
     ego_state = None
     if ego_candidate is not None:
         ego_state = ego_candidate.state
-    client._ego_state_snapshot = ego_state  # noqa: SLF001
+    # Use setattr so static analysers don't flag a missing attribute on MockCarlaClient
+    # (the attribute is declared in MockCarlaClient.__init__ for safety).
+    setattr(client, "_ego_state_snapshot", ego_state)  # noqa: SLF001
 
 
 class ScenarioRunner:
@@ -267,6 +272,11 @@ class ScenarioRunner:
             self._sensor_mgr = MockSensorManager(self._client)
             self._vehicle_to_state_fn = mock_vehicle_to_state
         else:
+            if isinstance(client, MockCarlaClient):
+                raise ValueError(
+                    "Cannot use MockCarlaClient when backend is 'carla'. "
+                    "Synthetic mock client is strictly prohibited in real CARLA mode."
+                )
             self._client = client or CarlaClient()
             self._actor_mgr = ActorManager(self._client)
             self._sensor_mgr = SensorManager(self._client)
@@ -336,8 +346,49 @@ class ScenarioRunner:
         MEDIUM / HIGH risk levels before Person 2 wires YOLO.
         """
         if self._backend != BACKEND_MOCK:
-            return []
+            raise RuntimeError(
+                "latest_mock_ground_truth_detections is strictly prohibited in real CARLA mode. "
+                "In real CARLA mode, use latest_ground_truth_objects."
+            )
         return list(getattr(self._sensor_mgr, "latest_ground_truth_objects", []) or [])
+
+    @property
+    def latest_ground_truth_objects(
+        self,
+    ) -> List[DetectedObject | GroundTruthObject]:
+        """Return image-space ground truth for the active mock or CARLA frame."""
+        if self._backend == BACKEND_MOCK:
+            return self.latest_mock_ground_truth_detections
+
+        if self._backend != BACKEND_CARLA:
+            raise RuntimeError(
+                f"Unsupported backend for ground truth extraction: {self._backend}"
+            )
+
+        if not self._ego_bundle or not self._traffic_bundle:
+            raise RuntimeError(
+                "Cannot extract CARLA ground truth before ego and traffic bundles are spawned."
+            )
+
+        camera = getattr(self._sensor_mgr, "rgb_cameras", {}).get("front")
+        if camera is None:
+            raise RuntimeError("Cannot extract CARLA ground truth without 'front' RGB camera.")
+
+        camera_cfg = self._cfg.get("sensors", {}).get("rgb_camera", {})
+        actors = (
+            self._traffic_bundle.vehicles
+            + self._traffic_bundle.pedestrians
+            + self._traffic_bundle.bicycles
+        )
+        return extract_carla_ground_truth(
+            actors,
+            self._ego_bundle.vehicle,
+            camera.get_transform(),
+            int(camera_cfg.get("width", settings.CAMERA_WIDTH)),
+            int(camera_cfg.get("height", settings.CAMERA_HEIGHT)),
+            float(camera_cfg.get("fov", settings.CAMERA_FOV)),
+            actor_ids={int(actor.id) for actor in actors},
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -358,9 +409,12 @@ class ScenarioRunner:
                 "fixed_delta_seconds": 0.05,
             })())
             if self._info.fine_weather:
-                weather_dict = dict(self._info.fine_weather)
-                weather_dict.setdefault("preset", self._info.weather_preset)
-                self._client.set_weather(weather_dict, preset_base=self._info.weather_preset)
+                # Pass fine-grained values as-is; preset_base provides the
+                # base palette without polluting the Dict[str, float] with a str.
+                self._client.set_weather(
+                    dict(self._info.fine_weather),
+                    preset_base=self._info.weather_preset,
+                )
             else:
                 self._client.set_weather(self._info.weather_preset)
             # --- Ego + traffic ------------------------------------------------
@@ -377,14 +431,15 @@ class ScenarioRunner:
             for _ in range(_SPAWN_WARMUP_TICKS):
                 _advance_mock_actors(self._client, 0.05)
                 self._client.tick()
+                _warmup_snap = self._client.get_snapshot()
                 npc_list = [
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != self._ego_bundle.vehicle.id and "vehicle" in a.type_id
                 ]
                 self._sensor_mgr.update_for_tick(
-                    frame_number=self._client._frame,  # noqa: SLF001
-                    sim_time_s=self._client._elapsed_s,  # noqa: SLF001
-                    actors=npc_list,
+                    _warmup_snap.frame,
+                    _warmup_snap.timestamp.elapsed_seconds,
+                    npc_list,
                 )
         else:
             self._client.connect()
@@ -489,24 +544,38 @@ class ScenarioRunner:
                 # 3) Push sensor frame generation
                 _advance_mock_actors(self._client, 0.05)
                 self._client.tick()  # frame++, elapsed_s += dt
-                snap = self._client.get_snapshot()
-                frame_number = snap.frame
-                timestamp_s = snap.timestamp.elapsed_seconds
+                _snap = self._client.get_snapshot()
+                frame_number = _snap.frame
+                timestamp_s = float(_snap.timestamp.elapsed_seconds)
                 npc_list = [
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != ego.id and "vehicle" in a.type_id
                 ]
                 self._sensor_mgr.update_for_tick(frame_number, timestamp_s, npc_list)
+                rgb_frame = self._sensor_mgr.latest_rgb
+                rgb_frame_number = (
+                    self._sensor_mgr.latest_rgb_frame
+                    if rgb_frame is not None
+                    else None
+                )
             else:
                 snap: WorldSnapshot = self._client.tick()
                 frame_number = snap.frame
                 timestamp_s = snap.timestamp
+                rgb_frame = self._sensor_mgr.wait_for_rgb_frame(
+                    frame_number, timeout=settings.CARLA_TIMEOUT
+                )
+                rgb_frame_number = (
+                    self._sensor_mgr.latest_rgb_frame
+                    if rgb_frame is not None
+                    else None
+                )
 
             if start_sim_time is None:
                 start_sim_time = timestamp_s
 
             elapsed_sim = timestamp_s - start_sim_time
-            if elapsed_sim >= duration:
+            if duration > 0 and elapsed_sim >= duration:
                 logger.info(f"⌛ Scenario duration reached ({duration:.0f}s sim time).")
                 break
 
@@ -519,10 +588,12 @@ class ScenarioRunner:
             yield SensorFrame(
                 timestamp=timestamp_s,
                 frame_number=frame_number,
-                rgb=self._sensor_mgr.latest_rgb,
+                rgb=rgb_frame,
                 vehicle_state=vs,
                 collision_events=collisions,
                 lane_invasions=lane_inv,
+                camera_views=self._sensor_mgr.get_synchronized_rgb_views(frame_number),
+                rgb_frame_number=rgb_frame_number,
             )
 
             # Rough wall-clock throttling (UX only – determinism doesn't depend on this).

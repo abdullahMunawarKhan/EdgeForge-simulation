@@ -19,12 +19,16 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+import numpy as np
+
 from edgeforge.config import settings
 from edgeforge.data.history import RunHistoryStore
 from edgeforge.data.models import DetectedObject, PerceptionFailureRecord
 from edgeforge.perception.validation import (
     FailureSeverityRules,
+    GroundTruthObject,
     RunValidationMetrics,
+    SUPPORTED_EVALUATION_CLASSES,
     ValidationMetrics,
     aggregate_run_metrics,
     evaluate_detections,
@@ -289,7 +293,7 @@ class ScenarioExecutionManager:
 
         resolved_backend = backend or self.default_backend
 
-        # 2. CARLA Backend safety check
+        # 2. CARLA Backend safety check & detector validation
         if resolved_backend == BACKEND_CARLA:
             try:
                 from edgeforge.simulation.carla_client import CarlaClient
@@ -298,6 +302,22 @@ class ScenarioExecutionManager:
                 test_client.disconnect()
             except Exception as exc:
                 err = f"CARLA server unreachable at {settings.CARLA_HOST}:{settings.CARLA_PORT} ({exc}). Cannot execute live scenario."
+                logger.error(f"🛑 {err}")
+                return ExecutionResult(
+                    candidate_id=candidate_id,
+                    scenario_id=scenario_id,
+                    run_id=run_id,
+                    status=ExecutionStatus.FAILED,
+                    backend=BACKEND_CARLA,
+                    scenario_config=cfg,
+                    error_message=err,
+                )
+
+            if detector is None or not hasattr(detector, "detect"):
+                err = (
+                    "Live CARLA perception evaluation requires a valid detector (e.g. ObjectDetector). "
+                    "Mock perception or missing detector is strictly prohibited in real CARLA mode."
+                )
                 logger.error(f"🛑 {err}")
                 return ExecutionResult(
                     candidate_id=candidate_id,
@@ -321,6 +341,15 @@ class ScenarioExecutionManager:
             "map": cfg.get("map", "Town01"),
             "weather": fine if fine else {"preset": cfg.get("weather", "ClearNoon")},
             "traffic": cfg.get("traffic", {}),
+            "actor_configuration": cfg.get("actor_configuration", {}),
+            "ego_vehicle": cfg.get("ego_vehicle", {}),
+            "sensors": cfg.get("sensors", {}),
+            "generated_metadata": cfg.get("generated_metadata", {}),
+            "parameters": {
+                "duration_seconds": cfg.get("duration_seconds"),
+                "fixed_delta_seconds": cfg.get("fixed_delta_seconds", 0.05),
+                "iou_threshold": iou_threshold,
+            },
         }
 
         try:
@@ -331,25 +360,72 @@ class ScenarioExecutionManager:
                     sim_elapsed_s = sf.timestamp
 
                     # Gather ground truth objects
-                    gt_objs: list[DetectedObject] = runner.latest_mock_ground_truth_detections
+                    gt_objs: list[DetectedObject | GroundTruthObject] = (
+                        runner.latest_ground_truth_objects
+                    )
+
+                    # In live CARLA mode, enforce strict frame synchronization, valid dimensions, and ground truth purity
+                    if resolved_backend == BACKEND_CARLA:
+                        if sf.rgb is None:
+                            raise RuntimeError(
+                                f"Missing RGB frame at simulation frame {sf.frame_number}."
+                            )
+
+                        rgb_frame_no = getattr(sf, "rgb_frame_number", None)
+                        if rgb_frame_no is None or rgb_frame_no != sf.frame_number:
+                            raise RuntimeError(
+                                f"Frame synchronization mismatch: camera frame {rgb_frame_no} "
+                                f"does not match simulation frame {sf.frame_number}."
+                            )
+
+                        cam_cfg = cfg.get("sensors", {}).get("rgb_camera", {})
+                        expected_w = int(cam_cfg.get("width", settings.CAMERA_WIDTH))
+                        expected_h = int(cam_cfg.get("height", settings.CAMERA_HEIGHT))
+                        if not isinstance(sf.rgb, np.ndarray) or sf.rgb.ndim != 3 or sf.rgb.shape[2] != 3:
+                            raise RuntimeError(
+                                f"Invalid RGB frame format at frame {sf.frame_number}: "
+                                f"expected (H, W, 3) ndarray, got {type(sf.rgb)} with shape {getattr(sf.rgb, 'shape', None)}."
+                            )
+                        if sf.rgb.shape[0] != expected_h or sf.rgb.shape[1] != expected_w:
+                            raise RuntimeError(
+                                f"Image dimension mismatch at frame {sf.frame_number}: "
+                                f"expected ({expected_h}, {expected_w}, 3), got {sf.rgb.shape}."
+                            )
+
+                        for obj in gt_objs:
+                            if isinstance(obj, DetectedObject):
+                                raise RuntimeError(
+                                    f"Detected mock DetectedObject in real CARLA ground truth at frame {sf.frame_number}. "
+                                    f"Synthetic ground truth leakage is strictly prohibited in real CARLA mode."
+                                )
 
                     # Produce or evaluate predictions
                     predictions: list[DetectedObject] = []
-                    if detector is not None and hasattr(detector, "detect"):
+                    if resolved_backend == BACKEND_CARLA:
                         try:
                             predictions = detector.detect(sf.rgb)
                         except Exception as det_exc:
-                            logger.warning(f"Detector error at frame {sf.frame_number}: {det_exc}")
-                            predictions = []
+                            raise RuntimeError(
+                                f"Detector failed during live CARLA inference at frame {sf.frame_number}: {det_exc}"
+                            ) from det_exc
                     else:
-                        # Synthetic deterministic perception evaluator based on weather conditions
-                        predictions = self._simulate_perception_detections(gt_objs, cfg, sf.frame_number)
+                        if detector is not None and hasattr(detector, "detect"):
+                            try:
+                                predictions = detector.detect(sf.rgb)
+                            except Exception as det_exc:
+                                raise RuntimeError(
+                                    f"Detector failed during inference at frame {sf.frame_number}: {det_exc}"
+                                ) from det_exc
+                        else:
+                            # Synthetic deterministic perception evaluator based on weather conditions
+                            predictions = self._simulate_perception_detections(gt_objs, cfg, sf.frame_number)
 
-                    # Evaluate detections using standard evaluation formulas
+                    # Evaluate detections using canonical supported classes
                     fm = evaluate_detections(
                         predictions=predictions,
                         ground_truth=gt_objs,
                         iou_threshold=iou_threshold,
+                        evaluation_classes=SUPPORTED_EVALUATION_CLASSES,
                         frame_id=sf.frame_number,
                         scenario_id=scenario_id,
                         run_id=run_id,
@@ -370,7 +446,15 @@ class ScenarioExecutionManager:
                 scenario_id=scenario_id,
                 run_id=run_id,
                 scenario_conditions=scenario_conditions,
-                parameters={"candidate_id": candidate_id, "backend": resolved_backend},
+                # Preserve the normalized config so the run can be reproduced from history.
+                parameters={
+                    "candidate_id": candidate_id,
+                    "backend": resolved_backend,
+                    "duration_seconds": cfg.get("duration_seconds"),
+                    "fixed_delta_seconds": cfg.get("fixed_delta_seconds", 0.05),
+                    "iou_threshold": iou_threshold,
+                    "scenario_config": cfg,
+                },
                 iou_threshold=iou_threshold,
             )
 

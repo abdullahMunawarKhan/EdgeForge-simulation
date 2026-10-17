@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from edgeforge.config import settings
+from edgeforge.data.failure_fingerprints import compute_failure_signature
 from edgeforge.data.history import RunHistoryStore, get_history_store
 from edgeforge.data.models import PerceptionFailureRecord
 from edgeforge.perception.validation import RunValidationMetrics
@@ -41,95 +42,6 @@ from edgeforge.utils import get_logger
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-# ---------------------------------------------------------------------------
-# Unique Failure Signature Definition
-# ---------------------------------------------------------------------------
-def compute_failure_signature(
-    failure: PerceptionFailureRecord | Mapping[str, Any],
-    scenario_conditions: Mapping[str, Any] | None = None,
-) -> str:
-    """Extract a canonical, deduplicated failure signature for a perception failure.
-
-    Definition:
-        A unique failure signature is defined by the 4-tuple:
-        (failure_type, object_class, severity, weather_lighting_bin)
-
-        Where environmental conditions are categorized into discrete bins:
-        - Fog bin:
-            * 'fog_clear'     (fog_density < 20.0)
-            * 'fog_moderate'  (20.0 <= fog_density <= 60.0)
-            * 'fog_dense'     (fog_density > 60.0)
-        - Rain bin:
-            * 'rain_none'     (precipitation < 10.0)
-            * 'rain_light'    (10.0 <= precipitation <= 50.0)
-            * 'rain_heavy'    (precipitation > 50.0)
-        - Lighting bin:
-            * 'night'         (sun_altitude_angle < 0.0)
-            * 'low_sun'       (0.0 <= sun_altitude_angle <= 25.0)
-            * 'day'           (sun_altitude_angle > 25.0)
-
-    Limitations:
-        1. Environmental discretization: Grouping continuous weather values into 3x3x3
-           discrete bins avoids treating slight weather noise as distinct bugs, but
-           boundary cases (e.g. fog 19% vs 21%) fall into adjacent bins.
-        2. Repeated frame deduplication: Repeated detection failures of the same object
-           class in the same scenario/condition bin are collapsed to 1 signature.
-        3. Geometry abstraction: Bins capture causal atmospheric/lighting contexts,
-           not distinct spatial trajectories (e.g. cut-in vs perpendicular crossing).
-    """
-    if isinstance(failure, dict):
-        ftype = failure.get("failure_type", "unknown_type")
-        oclass = failure.get("object_class") or "unknown_class"
-        severity = failure.get("severity", "medium")
-        embedded_conditions = failure.get("scenario_conditions") or {}
-    else:
-        ftype = getattr(failure, "failure_type", "unknown_type")
-        oclass = getattr(failure, "object_class", None) or "unknown_class"
-        severity = getattr(failure, "severity", "medium")
-        embedded_conditions = getattr(failure, "scenario_conditions", {}) or {}
-
-    conds = scenario_conditions if scenario_conditions is not None else embedded_conditions
-
-    weather = conds.get("weather", {})
-    if isinstance(weather, str) and weather in CARLA_WEATHER_PRESETS:
-        weather = CARLA_WEATHER_PRESETS[weather]
-
-    if isinstance(weather, dict):
-        fog = float(weather.get("fog_density", 0.0))
-        precip = float(weather.get("precipitation", 0.0))
-        sun_alt = float(weather.get("sun_altitude_angle", 60.0))
-    else:
-        fog = 0.0
-        precip = 0.0
-        sun_alt = 60.0
-
-    # Categorize fog
-    if fog < 20.0:
-        fog_bin = "fog_clear"
-    elif fog <= 60.0:
-        fog_bin = "fog_mod"
-    else:
-        fog_bin = "fog_dense"
-
-    # Categorize precipitation
-    if precip < 10.0:
-        rain_bin = "dry"
-    elif precip <= 50.0:
-        rain_bin = "light_rain"
-    else:
-        rain_bin = "heavy_rain"
-
-    # Categorize sun altitude
-    if sun_alt < 0.0:
-        sun_bin = "night"
-    elif sun_alt <= 25.0:
-        sun_bin = "low_sun"
-    else:
-        sun_bin = "day"
-
-    return f"{ftype}:{oclass}:{severity}:{fog_bin}_{rain_bin}_{sun_bin}"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +121,7 @@ class TestingStrategyBenchmark:
         seed: int = 42,
         backend: str = BACKEND_MOCK,
         output_dir: Optional[Path] = None,
+        detector: Optional[Any] = None,
     ) -> None:
         if scenario_budget <= 0:
             raise ValueError("scenario_budget must be a positive integer.")
@@ -223,6 +136,7 @@ class TestingStrategyBenchmark:
         self.backend = backend
         self.output_dir = Path(output_dir or PROJECT_ROOT / "runs" / "benchmarks" / f"bmk_{seed}_{backend}")
         self.benchmark_id = f"bmk_{seed}_{uuid_token()}"
+        self.detector = detector
 
     def run_dry_run(self) -> dict[str, Any]:
         """Perform dry-run validation for both strategies without simulation execution."""
@@ -287,6 +201,12 @@ class TestingStrategyBenchmark:
         logger.info(f"  Seed:           {self.seed}")
         logger.info("=" * 70)
 
+        if self.backend == BACKEND_CARLA and (self.detector is None or not hasattr(self.detector, "detect")):
+            raise RuntimeError(
+                "Live CARLA benchmark requires a valid detector (e.g. ObjectDetector). "
+                "Mock perception is strictly prohibited in real CARLA mode."
+            )
+
         # 1. Failure-Guided Exploration (Closed-loop adaptive execution)
         guided_metrics = self._run_guided_strategy()
 
@@ -345,6 +265,7 @@ class TestingStrategyBenchmark:
             exec_res = manager.execute(
                 selected,
                 backend=self.backend,
+                detector=self.detector,
                 max_frames=self.max_frames,
                 iou_threshold=self.iou_threshold,
             )
@@ -405,6 +326,7 @@ class TestingStrategyBenchmark:
             exec_res = manager.execute(
                 candidate,
                 backend=self.backend,
+                detector=self.detector,
                 max_frames=self.max_frames,
                 iou_threshold=self.iou_threshold,
             )
@@ -792,6 +714,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory to store benchmark exports.")
     args = parser.parse_args()
 
+    detector = None
+    if args.backend == BACKEND_CARLA and not args.dry_run:
+        from edgeforge.perception.detector import ObjectDetector
+
+        detector = ObjectDetector()
+
     benchmark = TestingStrategyBenchmark(
         scenario_budget=args.scenarios,
         max_frames_per_scenario=args.frames,
@@ -799,6 +727,7 @@ def main() -> int:
         seed=args.seed,
         backend=args.backend,
         output_dir=args.output_dir,
+        detector=detector,
     )
 
     if args.dry_run:
