@@ -106,3 +106,27 @@ def test_risk_score_stays_between_zero_and_one():
     )
 
     assert 0.0 <= result.risk_score <= 1.0
+
+
+def test_incomplete_measurements_are_explicit_when_no_object_contributes():
+    result = RiskEngine().calculate_risk(
+        [make_object("unknown", "car", None, None)],
+        make_vehicle(),
+    )
+
+    assert result.risk_score == 0.0
+    assert "risk assessment is incomplete" in result.reason
+
+
+def test_incomplete_measurements_are_explicit_alongside_known_hazards():
+    result = RiskEngine().calculate_risk(
+        [
+            make_object("known-hazard", "car", 3.0, -10.0),
+            make_object("partially-known", "pedestrian", 8.0, None),
+        ],
+        make_vehicle(),
+    )
+
+    assert result.risk_score > 0.0
+    assert "known-hazard" in result.contributing_objects
+    assert "risk assessment is incomplete" in result.reason

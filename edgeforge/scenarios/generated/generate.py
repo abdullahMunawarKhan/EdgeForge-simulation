@@ -9,11 +9,15 @@ Run from the project root:
 
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import random
 from pathlib import Path
 from typing import Any
+
+from edgeforge.scenarios.generator import CARLA_WEATHER_PRESETS, SUPPORTED_MAPS
+from edgeforge.simulation.mock_client import MockCarlaClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -26,31 +30,13 @@ OUTPUT_DIR = Path(__file__).resolve().parent
 SCENARIO_COUNT = 100
 RANDOM_SEED = 42
 
-WEATHER_OPTIONS = [
-    "ClearNoon",
-    "CloudyNoon",
-    "WetNoon",
-    "WetCloudyNoon",
-    "ClearSunset",
-    "CloudySunset",
-    "WetSunset",
-    "HardRainNoon",
-    "SoftRainNoon",
-    "ClearNight",
-    "CloudyNight",
-    "WetNight",
-]
-
-MAP_OPTIONS = [
-    "Town01",
-    "Town02",
-    "Town03",
-    "Town04",
-    "Town05",
-    "Town06",
-    "Town07",
-    "Town10HD",
-]
+CARLA_WEATHER_OPTIONS = tuple(CARLA_WEATHER_PRESETS)
+MOCK_WEATHER_OPTIONS = tuple(
+    name for name in CARLA_WEATHER_OPTIONS
+    if name in MockCarlaClient.PRESET_WEATHER
+)
+MAP_OPTIONS = SUPPORTED_MAPS
+SUPPORTED_BACKENDS = ("mock", "carla", "detect")
 
 SCENARIO_TYPES = [
     "low_traffic",
@@ -96,8 +82,14 @@ def build_scenario(
     template: dict[str, Any],
     index: int,
     rng: random.Random,
+    backend: str = "mock",
 ) -> dict[str, Any]:
     """Create one reproducible scenario using the template structure."""
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Choose one of {SUPPORTED_BACKENDS}."
+        )
+
     scenario = copy.deepcopy(template)
     scenario_type = SCENARIO_TYPES[(index - 1) % len(SCENARIO_TYPES)]
 
@@ -105,8 +97,14 @@ def build_scenario(
     scenario["description"] = (
         f"Generated EdgeForge scenario #{index}: {scenario_type.replace('_', ' ')}"
     )
-    scenario["weather"] = rng.choice(WEATHER_OPTIONS)
+    weather_options = (
+        CARLA_WEATHER_OPTIONS
+        if backend == "carla"
+        else MOCK_WEATHER_OPTIONS
+    )
+    scenario["weather"] = rng.choice(weather_options)
     scenario["map"] = rng.choice(MAP_OPTIONS)
+    scenario["simulation"] = {"backend": backend}
     scenario["duration_seconds"] = rng.choice([30, 60, 90, 120])
 
     traffic = scenario["traffic"]
@@ -152,21 +150,10 @@ def build_scenario(
     camera["fov"] = rng.choice([70, 90, 110])
     camera["tick"] = rng.choice([0.05, 0.1, 0.2])
 
-    # Exercise different sensor configurations.
-    if scenario_type == "sensor_comparison":
-        sensors["lidar"]["enabled"] = True
-        sensors["imu"]["enabled"] = True
-        sensors["gnss"]["enabled"] = True
-    else:
-        sensors["lidar"]["enabled"] = rng.choice([True, False])
-        sensors["imu"]["enabled"] = rng.choice([True, False])
-        sensors["gnss"]["enabled"] = rng.choice([True, False])
-
-    sensors["lidar"]["channels"] = rng.choice([16, 32, 64])
-    sensors["lidar"]["points_per_second"] = rng.choice(
-        [56000, 100000, 300000, 1000000]
-    )
-    sensors["lidar"]["range"] = rng.choice([10, 20, 50, 100])
+    # These modalities are still stubs in both current sensor adapters.
+    for sensor_name in ("lidar", "imu", "gnss"):
+        if sensor_name in sensors:
+            sensors[sensor_name]["enabled"] = False
 
     # Keep event sensors and risk analysis enabled for evaluation.
     sensors["collision"]["enabled"] = True
@@ -179,7 +166,8 @@ def build_scenario(
     scenario["notes"] = [
         f"Scenario category: {scenario_type}",
         "Generated from default_scenario.json.",
-        "Verify simulator compatibility before running.",
+        f"Generated for the {backend} backend.",
+        "LiDAR, IMU, and GNSS remain disabled until their adapters are implemented.",
     ]
 
     return scenario
@@ -188,10 +176,15 @@ def build_scenario(
 def generate_scenarios(
     count: int = SCENARIO_COUNT,
     seed: int = RANDOM_SEED,
+    backend: str = "mock",
 ) -> list[Path]:
     """Generate scenario JSON files and return their paths."""
     if count < 1:
         raise ValueError("count must be at least 1")
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Choose one of {SUPPORTED_BACKENDS}."
+        )
 
     template = load_template()
     rng = random.Random(seed)
@@ -200,7 +193,7 @@ def generate_scenarios(
     generated_paths: list[Path] = []
 
     for index in range(1, count + 1):
-        scenario = build_scenario(template, index, rng)
+        scenario = build_scenario(template, index, rng, backend=backend)
         output_path = OUTPUT_DIR / f"scenario_{index:03d}.json"
 
         with output_path.open("w", encoding="utf-8") as file:
@@ -211,7 +204,7 @@ def generate_scenarios(
         with output_path.open("r", encoding="utf-8") as file:
             saved_scenario = json.load(file)
 
-        if saved_scenario.keys() != template.keys():
+        if saved_scenario.keys() != template.keys() | {"simulation"}:
             raise ValueError(f"Unexpected schema in {output_path.name}")
 
         generated_paths.append(output_path)
@@ -222,4 +215,14 @@ def generate_scenarios(
 
 
 if __name__ == "__main__":
-    generate_scenarios()
+    parser = argparse.ArgumentParser(description="Generate EdgeForge scenarios.")
+    parser.add_argument("--count", type=int, default=SCENARIO_COUNT)
+    parser.add_argument("--seed", type=int, default=RANDOM_SEED)
+    parser.add_argument(
+        "--backend",
+        choices=SUPPORTED_BACKENDS,
+        default="mock",
+        help="Backend to target; 'detect' uses only options supported by both.",
+    )
+    args = parser.parse_args()
+    generate_scenarios(count=args.count, seed=args.seed, backend=args.backend)

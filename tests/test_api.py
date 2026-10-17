@@ -409,6 +409,187 @@ def test_mock_live_loop_publishes_and_persists_validation_failures(
     assert history["coverage"]["total_runs"] == 1
 
 
+def test_completed_mock_run_evaluates_and_persists_scenario_metrics(
+    monkeypatch, tmp_path,
+) -> None:
+    scenario_config = {
+        "name": "scenario-evaluation-test",
+        "risk_analysis": {"threshold": 0.75},
+    }
+
+    class NoInferenceDetector:
+        def detect(self, _frame: np.ndarray) -> list:
+            raise AssertionError("Frames without images must not invoke the detector")
+
+        def get_status(self) -> dict[str, str]:
+            return {"model": "disabled for test"}
+
+    class ControlledRiskEngine:
+        def __init__(self) -> None:
+            self.scores = iter([0.8, 0.9, 0.2])
+
+        def calculate_risk(self, _detections, _vehicle_state) -> RiskAssessment:
+            return RiskAssessment(risk_score=next(self.scores))
+
+    class StubScenarioRunner:
+        backend = "mock"
+        latest_ground_truth_objects = []
+        latest_mock_ground_truth_detections = []
+
+        def __init__(self, _config: dict, backend: str) -> None:
+            assert backend == "mock"
+            self.info = SimpleNamespace(
+                name=scenario_config["name"],
+                weather_preset="ClearNoon",
+                map_name="Town03",
+            )
+
+        @contextmanager
+        def run(self):
+            yield iter(
+                [
+                    SensorFrame(
+                        timestamp=1.0,
+                        frame_number=1,
+                        vehicle_state=VehicleState(speed=1.0),
+                    ),
+                    SensorFrame(
+                        timestamp=2.0,
+                        frame_number=2,
+                        vehicle_state=VehicleState(speed=1.0),
+                        collision_events=[
+                            {
+                                "timestamp": 2.0,
+                                "other_actor": "vehicle.audi.a2",
+                                "impulse_norm": 400.0,
+                            }
+                        ],
+                    ),
+                    SensorFrame(
+                        timestamp=4.0,
+                        frame_number=3,
+                        vehicle_state=VehicleState(speed=1.0),
+                        lane_invasions=[
+                            {
+                                "timestamp": 4.0,
+                                "crossed_markings": ["Solid", "Broken"],
+                            },
+                            {
+                                "timestamp": 4.0,
+                                "crossed_markings": ["Solid"],
+                            },
+                        ],
+                    ),
+                ]
+            )
+
+    monkeypatch.setattr(
+        "edgeforge.simulation.runner_service.ScenarioRunner",
+        StubScenarioRunner,
+    )
+    monkeypatch.setattr(
+        "edgeforge.simulation.runner_service.ObjectDetector",
+        NoInferenceDetector,
+    )
+    monkeypatch.setattr(
+        "edgeforge.simulation.runner_service.RiskEngine",
+        ControlledRiskEngine,
+    )
+    store = RunHistoryStore(tmp_path / "scenario-evaluation-history")
+    service = SimulationService(api_module.SimulationRuntime(), store)
+
+    service._run_loop("mock", scenario_config)
+
+    [saved_run] = store.list_runs(scenario_id=scenario_config["name"])
+    assert saved_run.frames_processed == 3
+    assert saved_run.scenario_metrics == {
+        "max_risk_score": 0.9,
+        "time_above_threshold": 3.0,
+        "near_collisions_ttc_below_1s": 0.0,
+        "collision_count": 1.0,
+        "lane_invasion_count": 2.0,
+    }
+    persisted_json = json.loads(store.run_path(saved_run.run_id).read_text(encoding="utf-8"))
+    assert persisted_json["scenario_metrics"] == saved_run.scenario_metrics
+
+
+def test_completed_mock_run_with_missing_risk_data_still_persists(
+    monkeypatch, tmp_path,
+) -> None:
+    scenario_config = {"name": "scenario-no-risk-samples"}
+
+    class NoInferenceDetector:
+        def detect(self, _frame: np.ndarray) -> list:
+            raise AssertionError("No image was provided")
+
+        def get_status(self) -> dict[str, str]:
+            return {"model": "disabled for test"}
+
+    class StubScenarioRunner:
+        backend = "mock"
+        latest_ground_truth_objects = []
+        latest_mock_ground_truth_detections = []
+
+        def __init__(self, _config: dict, backend: str) -> None:
+            assert backend == "mock"
+            self.info = SimpleNamespace(
+                name=scenario_config["name"],
+                weather_preset="ClearNoon",
+                map_name="Town03",
+            )
+
+        @contextmanager
+        def run(self):
+            yield iter(
+                [
+                    SensorFrame(timestamp=3.0, frame_number=1),
+                    SensorFrame(timestamp=5.0, frame_number=2),
+                ]
+            )
+
+    monkeypatch.setattr(
+        "edgeforge.simulation.runner_service.ScenarioRunner",
+        StubScenarioRunner,
+    )
+    monkeypatch.setattr(
+        "edgeforge.simulation.runner_service.ObjectDetector",
+        NoInferenceDetector,
+    )
+    store = RunHistoryStore(tmp_path / "scenario-missing-data-history")
+    service = SimulationService(api_module.SimulationRuntime(), store)
+
+    service._run_loop("mock", scenario_config)
+
+    [saved_run] = store.list_runs(scenario_id=scenario_config["name"])
+    assert saved_run.frames_processed == 2
+    assert saved_run.scenario_metrics == {
+        "max_risk_score": 0.0,
+        "time_above_threshold": 0.0,
+        "near_collisions_ttc_below_1s": 0.0,
+        "collision_count": 0.0,
+        "lane_invasion_count": 0.0,
+    }
+
+
+def test_history_reads_legacy_run_without_scenario_metrics(tmp_path) -> None:
+    store = RunHistoryStore(tmp_path / "legacy-history")
+    store.run_path("legacy-run").write_text(
+        json.dumps(
+            {
+                "run_id": "legacy-run",
+                "scenario_id": "legacy-scenario",
+                "frames_processed": 1,
+                "failure_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_run = store.get_run("legacy-run")
+
+    assert legacy_run.scenario_metrics == {}
+
+
 def test_start_accepts_frontend_scenario_payload_and_can_stop_and_restart(
     monkeypatch, tmp_path,
 ) -> None:

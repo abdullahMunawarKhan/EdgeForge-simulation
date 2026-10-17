@@ -185,6 +185,10 @@ class RiskEngine:
 
         overall_score = min(1.0, combined_hazard * ego_amplifier)
         level = self._risk_level(overall_score)
+        measurements_incomplete = any(
+            obj.distance is None or obj.relative_speed is None
+            for obj in detected_objects
+        )
 
         contributing: List[str] = []
         reasons: List[str] = []
@@ -237,6 +241,17 @@ class RiskEngine:
                     f" {len(reasons) - 3} additional contributing "
                     "object(s) omitted from the explanation."
                 )
+            if measurements_incomplete:
+                reason_text += (
+                    " risk assessment is incomplete because distance or "
+                    "relative-speed measurements are unavailable."
+                )
+        elif measurements_incomplete:
+            reason_text = (
+                f"{len(detected_objects)} object(s) observed, but distance or "
+                "relative-speed measurements are unavailable; risk assessment "
+                "is incomplete."
+            )
         else:
             reason_text = (
                 f"{level.name} risk: no individual object reached "

@@ -156,6 +156,7 @@ class HistoricalRunRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     excluded_predictions: int = Field(default=0, ge=0)
     excluded_ground_truth: int = Field(default=0, ge=0)
+    scenario_metrics: dict[str, float] = Field(default_factory=dict)
 
     @property
     def tp(self) -> int:

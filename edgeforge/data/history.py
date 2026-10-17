@@ -316,6 +316,7 @@ class RunHistoryStore:
         *,
         run_id: str | None = None,
         scenario_id: str | None = None,
+        scenario_metrics: Mapping[str, float] | None = None,
         overwrite: bool = False,
     ) -> HistoricalRunRecord:
         """Persist a completed validation run and its failure records atomically.
@@ -339,6 +340,10 @@ class RunHistoryStore:
             The saved, validated historical run record.
         """
         record = self._coerce_run_record(run_record, run_id=run_id, scenario_id=scenario_id)
+        if scenario_metrics is not None:
+            record = HistoricalRunRecord.model_validate(
+                record.model_dump() | {"scenario_metrics": dict(scenario_metrics)}
+            )
         resolved_run_id = record.run_id
 
         run_file = self.run_path(resolved_run_id)

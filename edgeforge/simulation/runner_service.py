@@ -15,9 +15,10 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
 from uuid import uuid4
 
 from edgeforge.analysis.risk_engine import RiskEngine
+from edgeforge.analysis.scenario_evaluator import ScenarioEvaluator
 from edgeforge.config.settings import PROJECT_ROOT, settings
 from edgeforge.data.history import RunHistoryStore
-from edgeforge.data.models import DetectedObject
+from edgeforge.data.models import DetectedObject, ScenarioEvent, ScenarioResult
 from edgeforge.perception.camera import CameraProcessor
 from edgeforge.perception.detector import (
     ObjectDetector,
@@ -30,7 +31,7 @@ from edgeforge.perception.validation import (
     aggregate_run_metrics,
     evaluate_detections,
 )
-from edgeforge.simulation.scenario_runner import ScenarioRunner
+from edgeforge.simulation.scenario_runner import BACKEND_MOCK, ScenarioRunner
 from edgeforge.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -274,6 +275,9 @@ class SimulationService:
 
         runner: Optional[ScenarioRunner] = None
         frame_metrics: list[ValidationMetrics] = []
+        risk_samples: list[dict[str, float]] = []
+        scenario_events: list[ScenarioEvent] = []
+        frame_timestamps: list[float] = []
         run_id = uuid4().hex
         completed = False
         try:
@@ -301,6 +305,11 @@ class SimulationService:
                 for frame in stream:
                     if self._stop_event.is_set():
                         break
+                    if runner.backend == BACKEND_MOCK:
+                        frame_timestamps.append(float(frame.timestamp))
+                        scenario_events.extend(
+                            self._scenario_events_for_frame(frame)
+                        )
 
                     pipeline_detections: list[DetectedObject] | None = None
                     last_detections: list[DetectedObject] = []
@@ -394,6 +403,13 @@ class SimulationService:
                             last_detections,
                             frame.vehicle_state,
                         )
+                        if runner.backend == BACKEND_MOCK:
+                            risk_samples.append(
+                                {
+                                    "timestamp": float(frame.timestamp),
+                                    "risk_score": float(last_risk.risk_score),
+                                }
+                            )
 
                     pipeline_status = perception_pipeline.get_status()
 
@@ -432,7 +448,9 @@ class SimulationService:
         except Exception as exc:
             logger.error(f"Error in SimulationService loop: {exc}", exc_info=True)
         finally:
-            if completed and frame_metrics:
+            if completed and runner is not None and (
+                frame_metrics or runner.backend == BACKEND_MOCK
+            ):
                 try:
                     run_metrics = aggregate_run_metrics(
                         frame_metrics,
@@ -444,7 +462,37 @@ class SimulationService:
                             "scenario_config": config,
                         },
                     )
-                    self.history_store.save_run(run_metrics)
+                    if runner.backend == BACKEND_MOCK:
+                        risk_config = config.get("risk_analysis", {})
+                        threshold = (
+                            risk_config.get("threshold", settings.RISK_THRESHOLD)
+                            if isinstance(risk_config, Mapping)
+                            else settings.RISK_THRESHOLD
+                        )
+                        scenario_result = ScenarioResult(
+                            scenario_name=str(
+                                scenario_conditions.get("scenario_name")
+                                or scenario_conditions["scenario_id"]
+                            ),
+                            run_id=run_id,
+                            success=True,
+                            exit_status="completed",
+                            duration_s=(
+                                max(frame_timestamps) - min(frame_timestamps)
+                                if frame_timestamps
+                                else 0.0
+                            ),
+                            events=scenario_events,
+                        )
+                        scenario_metrics = ScenarioEvaluator(
+                            risk_threshold=float(threshold),
+                        ).evaluate(scenario_result, risk_samples)
+                        self.history_store.save_run(
+                            run_metrics,
+                            scenario_metrics=scenario_metrics,
+                        )
+                    else:
+                        self.history_store.save_run(run_metrics)
                 except Exception:
                     logger.exception("Could not persist completed simulation history.")
             self.runtime.stop()
@@ -453,3 +501,30 @@ class SimulationService:
                 if self._thread is threading.current_thread():
                     self._thread = None
             logger.info("🛑 SimulationService loop stopped.")
+
+    @staticmethod
+    def _scenario_events_for_frame(frame: Any) -> list[ScenarioEvent]:
+        events: list[ScenarioEvent] = []
+        for event in frame.collision_events:
+            events.append(
+                ScenarioEvent(
+                    type="collision",
+                    severity="critical",
+                    timestamp=float(event.get("timestamp", frame.timestamp)),
+                    message=(
+                        f"Collision with {event.get('other_actor', 'unknown actor')}; "
+                        f"impulse={event.get('impulse_norm', 'unknown')}."
+                    ),
+                )
+            )
+        for event in frame.lane_invasions:
+            markings = event.get("crossed_markings", [])
+            events.append(
+                ScenarioEvent(
+                    type="lane_invasion",
+                    severity="warning",
+                    timestamp=float(event.get("timestamp", frame.timestamp)),
+                    message=f"Crossed lane markings: {', '.join(map(str, markings))}.",
+                )
+            )
+        return events
