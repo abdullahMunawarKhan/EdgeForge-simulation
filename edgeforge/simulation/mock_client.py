@@ -282,23 +282,23 @@ class MockCarlaClient:
         parent = self
 
         class _BP:
-            def filter(bp_self, pattern: str) -> List[Any]:
+            def filter(self, pattern: str) -> List[Any]:
                 pat = pattern.lower().replace("*", "")
                 matched = [bp for bp in parent.BLUEPRINTS if pat in bp.lower()]
 
                 class _Entry:
-                    def __init__(e_self, bp_name: str):
-                        e_self.id = bp_name
-                        e_self._attrs: Dict[str, Any] = {}
+                    def __init__(self, bp_name: str):
+                        self.id = bp_name
+                        self._attrs: Dict[str, Any] = {}
 
-                    def has_attribute(e_self, key: str) -> bool:
-                        return key in e_self._attrs
+                    def has_attribute(self, key: str) -> bool:
+                        return key in self._attrs
 
-                    def set_attribute(e_self, key: str, val: Any) -> None:
-                        e_self._attrs[key] = val
+                    def set_attribute(self, key: str, val: Any) -> None:
+                        self._attrs[key] = val
 
-                    def __repr__(e_self) -> str:
-                        return f"BP({e_self.id})"
+                    def __repr__(self) -> str:
+                        return f"BP({self.id})"
 
                 return [_Entry(m) for m in matched]
 
@@ -335,9 +335,9 @@ class MockCarlaClient:
             if ids:
                 items = [a for a in items if a.id in ids]
         class _List:
-            def __len__(l_self) -> int: return len(items)
-            def __iter__(l_self): return iter(items)
-            def filter(l_self, pattern: str):
+            def __len__(self) -> int: return len(items)
+            def __iter__(self): return iter(items)
+            def filter(self, pattern: str):
                 pat = pattern.lower().replace("*", "")
                 return [a for a in items if pat in a.type_id.lower()]
         return _List()

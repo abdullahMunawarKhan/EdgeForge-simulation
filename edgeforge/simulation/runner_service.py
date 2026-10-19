@@ -135,7 +135,7 @@ class SimulationService:
         with self._lock:
             # Normalize weather
             raw_weather = updates.get("weather")
-            weather_dict: Dict[str, float] = {}
+            weather_dict: Dict[str, Any] = {}
             if isinstance(raw_weather, dict):
                 for k, v in raw_weather.items():
                     if isinstance(v, (int, float)):
@@ -208,6 +208,8 @@ class SimulationService:
 
             # Inject active configuration into runner config
             merged_cfg = deepcopy(base_cfg)
+            if backend == "carla" and "map" not in (scenario_config or {}):
+                merged_cfg["map"] = "current"
             if "weather" in self._current_config:
                 merged_cfg["weather"] = deepcopy(self._current_config["weather"])
             if "traffic" in self._current_config:
@@ -280,6 +282,7 @@ class SimulationService:
         frame_timestamps: list[float] = []
         run_id = uuid4().hex
         completed = False
+        scenario_conditions: Dict[str, Any] = {}
         try:
             runner = ScenarioRunner(config, backend=backend)
             with self._lock:

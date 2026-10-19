@@ -1,0 +1,111 @@
+{
+  "excluded_ground_truth": 0,
+  "excluded_predictions": 0,
+  "f1": 1.0,
+  "failure_count": 0,
+  "false_positives": 0,
+  "frames_processed": 791,
+  "ground_truth_objects": 3955,
+  "iou_threshold": 0.5,
+  "matched_iou": 1.0,
+  "metadata": {},
+  "missed_detections": 0,
+  "parameters": {
+    "backend": "mock",
+    "scenario_config": {
+      "description": "Starter EdgeForge urban driving scenario",
+      "duration_seconds": 0,
+      "ego_vehicle": {
+        "autopilot": false,
+        "model": "vehicle.tesla.model3",
+        "spawn_point_index": 0,
+        "speed_limit": 50
+      },
+      "map": "Town03",
+      "name": "basic_urban_scenario",
+      "notes": [
+        "TODO: Add scenario events (sudden braking, pedestrian crossing, cut-in, etc.).",
+        "TODO: Add waypoint route for the ego vehicle.",
+        "TODO: Add success / failure criteria for scenario evaluation."
+      ],
+      "risk_analysis": {
+        "enabled": true,
+        "threshold": 0.7
+      },
+      "sensors": {
+        "collision": {
+          "enabled": true
+        },
+        "gnss": {
+          "enabled": false
+        },
+        "imu": {
+          "enabled": false
+        },
+        "lane_invasion": {
+          "enabled": true
+        },
+        "lidar": {
+          "channels": 64,
+          "enabled": false,
+          "points_per_second": 1000000,
+          "range": 100
+        },
+        "rgb_camera": {
+          "enabled": true,
+          "fov": 90,
+          "height": 720,
+          "tick": 0.05,
+          "width": 1280
+        }
+      },
+      "traffic": {
+        "bicycles": 2,
+        "pedestrians": 10,
+        "vehicles": 5
+      },
+      "version": "1.0",
+      "weather": {
+        "fog_density": 40.0,
+        "precipitation": 70.0,
+        "sun_altitude_angle": 60.0,
+        "wetness": 80.0
+      }
+    }
+  },
+  "precision": 1.0,
+  "predictions": 3955,
+  "recall": 1.0,
+  "run_id": "bb3609f5810f4916bf488d763a1d703d",
+  "scenario_conditions": {
+    "backend": "mock",
+    "lighting": "Day",
+    "map": "Town03",
+    "run_id": "bb3609f5810f4916bf488d763a1d703d",
+    "scenario_id": "basic_urban_scenario",
+    "scenario_name": "basic_urban_scenario",
+    "traffic": {
+      "bicycles": 2,
+      "pedestrians": 10,
+      "vehicles": 5
+    },
+    "traffic_density": "Moderate",
+    "weather": {
+      "fog_density": 40.0,
+      "precipitation": 70.0,
+      "sun_altitude_angle": 60.0,
+      "wetness": 80.0
+    },
+    "weather_preset": "ClearNoon"
+  },
+  "scenario_id": "basic_urban_scenario",
+  "scenario_metrics": {
+    "collision_count": 0.0,
+    "lane_invasion_count": 4.0,
+    "max_risk_score": 0.0,
+    "near_collisions_ttc_below_1s": 0.0,
+    "time_above_threshold": 0.0
+  },
+  "timestamp": "2026-10-17T06:01:56.919045+00:00",
+  "true_positives": 3955
+}

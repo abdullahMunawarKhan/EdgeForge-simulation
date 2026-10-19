@@ -34,7 +34,7 @@ from edgeforge.utils.logger import get_logger
 logger = get_logger(__name__)
 _CAMERA_FRAME_MAX_AGE_SECONDS = 3.0
 _CAMERA_JPEG_QUALITY = 82
-CAMERA_NAMES = ("front", "right_side", "top_down")
+CAMERA_NAMES = ("front", "top_down")
 
 _DEFAULT_SNAPSHOT: dict[str, Any] = {
     "simulation_status": "disconnected",

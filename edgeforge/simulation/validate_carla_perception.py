@@ -13,7 +13,7 @@ import sys
 import time
 from math import isfinite
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 

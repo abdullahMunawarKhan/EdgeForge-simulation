@@ -4,10 +4,15 @@ import argparse
 import sys
 from pathlib import Path
 
-try:
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     import carla
-except ImportError:
-    carla = None
+else:
+    try:
+        import carla
+    except ImportError:
+        carla = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:

@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from edgeforge.config.settings import settings
 
-DISTANCE_METERS = 30.0
+DISTANCE_METERS = 10.0
 TARGET_SPEED = 2.0  # m/s, approximately 7.2 km/h
 
 

@@ -168,18 +168,17 @@ The FastAPI app exposes read-only endpoints:
 | `GET /api/v1/simulation/snapshot` | Latest available pipeline snapshot |
 | `WS /api/v1/simulation/ws` | Initial snapshot followed by newly published snapshots |
 | `GET /api/v1/simulation/reports/latest` | Latest saved Phase 4 validation report, if present |
-| `GET /api/v1/simulation/camera/status` | Availability and frame/FPS metadata for all three views |
+| `GET /api/v1/simulation/camera/status` | Availability and frame/FPS metadata for front and top-down views |
 | `GET /api/v1/simulation/camera/front/stream` | MJPEG front view with pipeline YOLO overlays |
-| `GET /api/v1/simulation/camera/right_side/stream` | MJPEG right-side RGB view |
 | `GET /api/v1/simulation/camera/top_down/stream` | MJPEG top-down RGB view |
 
-The managed runner attaches front, right-side, and top-down sensors to the
-existing ego vehicle; top-down is mounted 20 metres above it with pitch
+The managed runner attaches front and top-down sensors to the existing ego
+vehicle; top-down is mounted 20 metres above it with pitch
 `-90°`. It publishes only same-simulator-frame images. The camera JPEG encoder
 uses a bounded background queue so stale frames can be dropped instead of
 holding up the simulation callback. YOLO boxes are overlaid on the front view
-from the existing perception pipeline; side and top-down are live RGB views
-without those front-camera detections. The old `/camera/stream` route remains a
+from the existing perception pipeline; top-down is a live RGB view without
+those front-camera detections. The old `/camera/stream` route remains a
 front-view alias.
 
 The API runtime stores data in process memory. For live snapshots and camera
@@ -359,10 +358,10 @@ network, and browser all work together in real time.
 
 ## 8. Current limitations and pending integration
 
-- **The managed three-view camera path was live-smoke-tested.** On 2026-10-16,
-  CARLA 0.9.16 at the configured host accepted the client; front, right-side,
-  and top-down camera statuses all reported available on the same frame ID,
-  and each MJPEG endpoint returned HTTP 200 with a multipart response. The
+- **The managed two-view camera path was live-smoke-tested.** On 2026-10-16,
+  CARLA 0.9.16 at the configured host accepted the client; front and top-down
+  camera statuses both reported available on the same frame ID, and each
+  MJPEG endpoint returned HTTP 200 with a multipart response. The
   smoke scenario ran with one ego vehicle and no background traffic; after
   shutdown, CARLA reported zero remaining vehicles, walkers, and RGB sensors.
 - **The full default traffic scenario is not verified.** An attempt to start

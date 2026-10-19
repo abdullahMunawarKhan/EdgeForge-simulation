@@ -130,7 +130,6 @@ def main():
     cameras = {}
     frames = {
         "front": queue.Queue(maxsize=1),
-        "right_side": queue.Queue(maxsize=1),
         "top_down": queue.Queue(maxsize=1),
     }
     pending_camera_frames: dict[str, tuple[np.ndarray, int, float]] = {}
@@ -156,10 +155,6 @@ def main():
 
         camera_transforms = {
             "front": carla.Transform(carla.Location(x=1.5, z=2.4)),
-            "right_side": carla.Transform(
-                carla.Location(y=2.0, z=2.0),
-                carla.Rotation(pitch=-5.0, yaw=90.0),
-            ),
             "top_down": carla.Transform(
                 carla.Location(z=20.0),
                 carla.Rotation(pitch=-90.0, yaw=0.0),
@@ -205,8 +200,7 @@ def main():
         active_camera = "front"
         print(
             f"YOLO running. Dashboard API: http://{settings.API_HOST}:"
-            f"{settings.API_PORT}. Press 1 for front, 2 for right-side, "
-            "3 for top-down, or Q to quit."
+            f"{settings.API_PORT}. Press 1 for front, 2 for top-down, or Q to quit."
         )
         last_detection_log = 0.0
 
@@ -219,15 +213,14 @@ def main():
 
             detections = detector.detect_objects(front_frame)
             dashboard_frames = {"front": front_frame}
-            for camera_name in ("right_side", "top_down"):
-                camera_frame = _get_camera_frame_for_tick(
-                    camera_name,
-                    frames,
-                    pending_camera_frames,
-                    frame_id,
-                )
-                if camera_frame is not None:
-                    dashboard_frames[camera_name] = camera_frame[0]
+            camera_frame = _get_camera_frame_for_tick(
+                "top_down",
+                frames,
+                pending_camera_frames,
+                frame_id,
+            )
+            if camera_frame is not None:
+                dashboard_frames["top_down"] = camera_frame[0]
             publish_front_dashboard_frame(
                 runtime,
                 front_frame,
@@ -250,8 +243,6 @@ def main():
                 if key == ord("1"):
                     active_camera = "front"
                 elif key == ord("2"):
-                    active_camera = "right_side"
-                elif key == ord("3"):
                     active_camera = "top_down"
                 elif key == ord("q"):
                     break
@@ -262,9 +253,7 @@ def main():
             camera_label = (
                 "Front camera (1)"
                 if active_camera == "front"
-                else "Right-side camera (2)"
-                if active_camera == "right_side"
-                else "Top-down camera (3)"
+                else "Top-down camera (2)"
             )
             cv2.putText(
                 annotated,
@@ -296,8 +285,6 @@ def main():
             if key == ord("1"):
                 active_camera = "front"
             elif key == ord("2"):
-                active_camera = "right_side"
-            elif key == ord("3"):
                 active_camera = "top_down"
             elif key == ord("q"):
                 break
