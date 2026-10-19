@@ -53,7 +53,7 @@ EdgeForge-env/
 │   ├── simulation/
 │   │   ├── carla_client.py          # CARLA connection lifecycle, sync mode, & weather presets
 │   │   ├── actor_manager.py         # Ego vehicle & TrafficManager NPC traffic spawner
-│   │   ├── sensor_manager.py        # Front, right-side, top-down camera mounts & collision sensors
+│   │   ├── sensor_manager.py        # Front, top-down camera mounts & collision sensors
 │   │   ├── scenario_runner.py       # Synchronous scenario frame loop & backend selector
 │   │   ├── validate_carla_perception.py # Standalone CLI for live CARLA GT-versus-YOLO validation
 │   │   └── mock_*.py                # Synthetic test doubles for offline validation
@@ -61,7 +61,7 @@ EdgeForge-env/
 └── frontend/                        # React 18 / Vite / Tailwind Dashboard
     ├── src/
     │   ├── pages/                   # Overview, LiveSimulation, ScenarioLab, FailureAnalysis, CoverageExplorer
-    │   ├── components/layout/       # CameraFeed.jsx (3-view MJPEG stream renderer)
+    │   ├── components/layout/       # CameraFeed.jsx (front and top-down MJPEG views)
     │   ├── hooks/                   # useLiveSimulation.js (WebSocket with REST polling fallback)
     │   ├── services/                # liveSimulation.js, cameraFeed.js (API client endpoints)
     │   └── data/                    # Bundled offline presentation demo dataset & labels
@@ -75,9 +75,9 @@ EdgeForge-env/
 | Connection | Status | Evidence & Verification Details |
 |---|---|---|
 | **Frontend ↔ FastAPI** | **Verified** | Configured via `VITE_EDGEFORGE_API_URL` (default: `http://127.0.0.1:8000`). `useLiveSimulation.js` fetches `/status`, opens WebSocket `/ws`, and gracefully degrades to 5000ms polling on REST `/snapshot`. CORS middleware allows ports 5173 and 5174. |
-| **CARLA ↔ Python** | **Verified** | Target configured in `.env` (`CARLA_HOST=192.168.96.91`, `CARLA_PORT=2001`). Connects via `carla.Client` with synchronous mode (`fixed_delta_seconds=0.05`). Teardown safely restores original world settings. |
+| **CARLA ↔ Python** | **Verified** | Target configured in `.env` (`CARLA_HOST=192.168.96.145`, `CARLA_PORT=2001`). Connects via `carla.Client` with synchronous mode (`fixed_delta_seconds=0.05`). Teardown safely restores original world settings. |
 | **API / WebSocket Streaming** | **Verified** | In `api.py`, `WS /api/v1/simulation/ws` sends initial snapshot and pushes new snapshots on version increment. REST fallback `/api/v1/simulation/snapshot` functions concurrently. |
-| **3 CARLA Camera Feeds** | **Verified (Headless) / Unverified (Browser)** | `sensor_manager.py` attaches 3 camera transforms: Front `(x=1.5, z=2.4)`, Right-Side `(y=2.0, z=2.0, yaw=90°)`, Top-Down `(z=20.0, pitch=-90°)`. Background thread encodes JPEGs. Endpoints `/api/v1/simulation/camera/{front,right_side,top_down}/stream` stream multipart MJPEG. Smoke test verified HTTP 200 on all 3 feeds; live browser rendering with moving traffic remains unverified. |
+| **2 CARLA Camera Feeds** | **Verified (Headless) / Unverified (Browser)** | `sensor_manager.py` attaches front `(x=1.5, z=2.4)` and top-down `(z=20.0, pitch=-90°)` cameras. Background thread encodes JPEGs. Endpoints `/api/v1/simulation/camera/{front,top_down}/stream` stream multipart MJPEG. Live browser rendering with moving traffic remains unverified. |
 
 ---
 
@@ -188,7 +188,7 @@ Classifications:
 | **Phase 4: Ground-Truth Validation** | **Partial** | Complete 3D-to-2D box projection, IoU matching, metric calculation (`precision`, `recall`, `f1`), and failure categorization implemented in `validation.py`. However, it is **Missing** from `main.py` live loops and requires manual CLI execution. |
 | **Phase 4A: Failure History & Storage** | **Verified** | `RunHistoryStore` in `history.py` provides atomic JSON/JSONL persistence, summary indexing, and coverage matrix computation. |
 | **Phase 5: Next-Best Scenario Generator** | **Partial** | Ranking engine in `generator.py` combines failure evidence, coverage novelty, and similarity. Frontend displays recommendations. Automated closed-loop dispatch to CARLA from the UI is **Missing**. |
-| **Phase 6: Multi-Camera Live Dashboard** | **Unverified** | 3-view MJPEG streaming (`front`, `right_side`, `top_down`) verified via headless curl; live browser rendering with real traffic and active detections remains unverified. |
+| **Phase 6: Two-Camera Live Dashboard** | **Unverified** | 2-view MJPEG streaming (`front`, `top_down`); live browser rendering with real traffic and active detections remains unverified. |
 | **CARLA Traffic Simulation** | **Blocked** | Default scenario with 5 vehicles, 10 pedestrians, and 2 bicycles in Town03 causes Windows startup crash. |
 | **Advanced Perception (LiDAR / Fusion)** | **Missing** | LiDAR, radar, and sensor fusion disabled in scenario configs; monocular RGB only. |
 | **Adversarial Behaviors (Cut-in, Jaywalking)** | **Missing** | Explicitly classified as `KNOWN_UNSUPPORTED_PARAMETERS` in `generator.py`. |

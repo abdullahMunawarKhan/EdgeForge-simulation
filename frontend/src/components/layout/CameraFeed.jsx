@@ -4,7 +4,6 @@ import { buildCameraFeedUrls } from '@/services/cameraFeed.js'
 const CAMERA_STATUS_POLL_MS = 1500
 const CAMERA_VIEWS = [
   { id: 'front', label: 'Front', yoloOverlay: true },
-  { id: 'right_side', label: 'Side', yoloOverlay: false },
   { id: 'top_down', label: 'Top-Down', yoloOverlay: false },
 ]
 
@@ -149,7 +148,7 @@ export function CameraFeed() {
         <div>
           <h2 className="text-sm font-semibold">Live CARLA camera views</h2>
           <p className="mt-1 text-xs text-text-muted">
-            Front, side, and top-down views from the existing ego vehicle. YOLO detections
+            Front and top-down views from the existing ego vehicle. YOLO detections
             are overlaid on the front view.
           </p>
         </div>
@@ -158,7 +157,7 @@ export function CameraFeed() {
         </button>
       </div>
 
-      <div className="grid gap-3 bg-bg p-3 sm:grid-cols-2 xl:grid-cols-3 sm:p-4">
+      <div className="grid gap-3 bg-bg p-3 sm:grid-cols-2 sm:p-4">
         {CAMERA_VIEWS.map((view) => {
           const camera = cameras[view.id]
           const connected = camera.available && streamConnected[view.id]

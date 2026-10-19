@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import atexit
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
-try:
+if TYPE_CHECKING:
     import carla
-except ImportError:
-    carla = None  # type: ignore[assignment]
+else:
+    try:
+        import carla
+    except ImportError:
+        carla = None
 
 from edgeforge.config import settings
 from edgeforge.utils import get_logger
@@ -237,8 +240,9 @@ class CarlaClient:
         for actor in reversed(self._actors):
             if actor is not None and actor.is_alive:
                 try:
-                    if hasattr(actor, "stop"):
-                        actor.stop()
+                    stop_fn = getattr(actor, "stop", None)
+                    if callable(stop_fn):
+                        stop_fn()
                     actor.destroy()
                 except Exception as exc:  # pragma: no cover
                     logger.warning(f"Failed to destroy {actor.type_id}: {exc}")
@@ -320,6 +324,14 @@ class CarlaClient:
         """
         if carla is None:
             raise RuntimeError("The CARLA Python API is required to load maps.")
+        if self._map is not None:
+            current_clean = self._map.name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+            target_clean = map_name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+            if current_clean == target_clean:
+                logger.info(
+                    f"🗺  CARLA is already on map '{self._map.name}'; skipping redundant load."
+                )
+                return
         logger.info(f"🗺  Requesting map load: {map_name}")
         if layer is not None:
             self.raw_client.load_world(map_name, layer)

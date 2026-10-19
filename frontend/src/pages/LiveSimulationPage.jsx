@@ -25,7 +25,7 @@ const EXPECTED_ENDPOINTS = [
   'WS /api/v1/simulation/ws',
   'GET /api/v1/simulation/reports/latest',
   'GET /api/v1/simulation/camera/status',
-  'GET /api/v1/simulation/camera/{front|right_side|top_down}/stream (MJPEG)',
+  'GET /api/v1/simulation/camera/{front|top_down}/stream (MJPEG)',
 ]
 
 function ConnectionBadge({ connection }) {
@@ -78,6 +78,7 @@ function RiskBadge({ level }) {
 
 export function LiveSimulationPage({ onSwitchToStatic }) {
   const live = useLiveSimulation()
+  const [simulationBackend, setSimulationBackend] = useState('carla')
   const [scenarioConfiguration, setScenarioConfiguration] = useState(
     DEFAULT_SCENARIO_PREVIEW,
   )
@@ -113,7 +114,7 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
 
   const handleStartSimulation = async () => {
     await live.startSimulation({
-      backend: 'mock',
+      backend: simulationBackend,
       scenario: scenarioConfiguration,
     })
   }
@@ -135,8 +136,8 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
             Live perception & simulation monitor
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-text-muted">
-            Direct real-time link to the EdgeForge simulation runtime. Controls allow
-            starting/stopping the mock simulation and updating environmental stress parameters.
+            Connect the existing dashboard to the configured CARLA server or run offline in mock
+            mode. Camera frames and YOLO inference are processed by the EdgeForge backend.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -196,14 +197,31 @@ export function LiveSimulationPage({ onSwitchToStatic }) {
                 {live.actionLoading === 'stop' ? 'Stopping…' : '⏹ Stop Simulation'}
               </button>
             ) : (
-              <button
-                type="button"
-                className="btn btn-primary font-semibold px-4 py-2"
-                onClick={handleStartSimulation}
-                disabled={Boolean(live.actionLoading) || !live.backendConfigured}
-              >
-                {live.actionLoading === 'start' ? 'Starting…' : '▶ Start Mock Simulation'}
-              </button>
+              <>
+                <label className="sr-only" htmlFor="simulation-backend">
+                  Simulation backend
+                </label>
+                <select
+                  id="simulation-backend"
+                  className="field-input min-h-10"
+                  value={simulationBackend}
+                  onChange={(event) => setSimulationBackend(event.target.value)}
+                  disabled={Boolean(live.actionLoading) || !live.backendConfigured}
+                >
+                  <option value="carla">CARLA · remote simulator</option>
+                  <option value="mock">Mock · local simulation</option>
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-primary font-semibold px-4 py-2"
+                  onClick={handleStartSimulation}
+                  disabled={Boolean(live.actionLoading) || !live.backendConfigured}
+                >
+                  {live.actionLoading === 'start'
+                    ? 'Starting…'
+                    : `▶ Start ${simulationBackend === 'carla' ? 'CARLA' : 'Mock'} Simulation`}
+                </button>
+              </>
             )}
 
             <button

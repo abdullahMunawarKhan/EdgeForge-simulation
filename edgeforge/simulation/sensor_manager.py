@@ -20,12 +20,15 @@ import math
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
-try:
+if TYPE_CHECKING:
     import carla
-except ImportError:
-    carla = None
+else:
+    try:
+        import carla
+    except ImportError:
+        carla = None
 import numpy as np
 
 from edgeforge.config import settings
@@ -36,7 +39,6 @@ logger = get_logger(__name__)
 
 CAMERA_VIEW_MOUNTS = {
     "front": (1.5, 0.0, 2.4, 0.0, 0.0),
-    "right_side": (0.0, 2.0, 2.0, -5.0, 90.0),
     "top_down": (0.0, 0.0, 20.0, -90.0, 0.0),
 }
 
@@ -243,9 +245,10 @@ class SensorManager:
         self._sensors.append(sensor)
 
         def on_collision(event: carla.CollisionEvent) -> None:
+            ts = getattr(event.timestamp, "elapsed_seconds", event.timestamp)
             entry = {
                 "frame": event.frame,
-                "timestamp": event.timestamp.elapsed_seconds,
+                "timestamp": float(ts),
                 "other_actor": event.other_actor.type_id if event.other_actor else "unknown",
                 "impulse_norm": math.sqrt(
                     event.normal_impulse.x**2 +
@@ -272,9 +275,10 @@ class SensorManager:
         self._sensors.append(sensor)
 
         def on_lane(event: carla.LaneInvasionEvent) -> None:
+            ts = getattr(event.timestamp, "elapsed_seconds", event.timestamp)
             entry = {
                 "frame": event.frame,
-                "timestamp": event.timestamp.elapsed_seconds,
+                "timestamp": float(ts),
                 "crossed_markings": [str(m.type) for m in event.crossed_lane_markings],
             }
             self.lane_invasions.append(entry)
@@ -305,9 +309,11 @@ class SensorManager:
     def cleanup(self) -> None:
         """Stop listening on every sensor (actors are destroyed via client)."""
         for s in self._sensors:
-            if s.is_alive and hasattr(s, "stop"):
+            if s.is_alive:
                 try:
-                    s.stop()
+                    stop_fn = getattr(s, "stop", None)
+                    if callable(stop_fn):
+                        stop_fn()
                 except Exception:
                     logger.exception("Could not stop a CARLA sensor during cleanup.")
         self._sensors.clear()

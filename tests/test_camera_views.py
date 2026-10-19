@@ -59,7 +59,7 @@ def _image(frame_number: int) -> SimpleNamespace:
     )
 
 
-def test_managed_camera_suite_attaches_three_views_to_same_ego_and_cleans_up(
+def test_managed_camera_suite_attaches_front_and_top_down_views_to_same_ego_and_cleans_up(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -87,27 +87,23 @@ def test_managed_camera_suite_attaches_three_views_to_same_ego_and_cleans_up(
         },
     )
 
-    assert len(client.world.spawned) == 3
-    assert len(client.registered) == 3
+    assert len(client.world.spawned) == 2
+    assert len(client.registered) == 2
     assert all(attachment is ego for _, _, attachment in client.world.spawned)
-    assert list(CAMERA_VIEW_MOUNTS) == [
-        "front",
-        "right_side",
-        "top_down",
-    ]
-    top_location, top_rotation = client.world.spawned[2][1]
+    assert list(CAMERA_VIEW_MOUNTS) == ["front", "top_down"]
+    top_location, top_rotation = client.world.spawned[1][1]
     assert top_location == {"x": 0.0, "y": 0.0, "z": 20.0}
     assert top_rotation == {"pitch": -90.0, "yaw": 0.0}
 
     for sensor in client.world.sensors:
         sensor.callback(_image(12))
     synchronized = sensors.get_synchronized_rgb_views(12)
-    assert set(synchronized) == {"front", "right_side", "top_down"}
+    assert set(synchronized) == {"front", "top_down"}
     assert all(frame.shape == (4, 6, 3) for frame in synchronized.values())
     assert sensors.latest_rgb is synchronized["front"]
 
-    client.world.sensors[2].callback(_image(13))
-    assert set(sensors.get_synchronized_rgb_views(12)) == {"front", "right_side"}
+    client.world.sensors[1].callback(_image(13))
+    assert set(sensors.get_synchronized_rgb_views(12)) == {"front"}
 
     sensors.cleanup()
     assert all(sensor.stop_calls == 1 for sensor in client.world.sensors)
@@ -144,6 +140,6 @@ def test_camera_cleanup_continues_after_a_sensor_stop_failure(monkeypatch) -> No
     sensors.cleanup()
 
     assert client.world.sensors[0].stop_calls == 1
-    assert client.world.sensors[2].stop_calls == 1
+    assert client.world.sensors[1].stop_calls == 0
     assert sensors._sensors == []
     assert logged_errors == ["Could not stop a CARLA sensor during cleanup."]

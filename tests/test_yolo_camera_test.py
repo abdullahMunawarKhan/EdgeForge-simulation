@@ -97,7 +97,6 @@ def test_yolo_camera_frame_collection_keeps_a_future_frame_for_next_tick() -> No
 
 def test_front_camera_frame_and_yolo_results_are_published_to_dashboard() -> None:
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
-    right_side_frame = np.full((32, 32, 3), 32, dtype=np.uint8)
     top_down_frame = np.full((32, 32, 3), 64, dtype=np.uint8)
     detection = DetectedObject(
         object_type="car",
@@ -122,7 +121,6 @@ def test_front_camera_frame_and_yolo_results_are_published_to_dashboard() -> Non
             scenario_conditions=conditions,
             detector_status=detector_status,
             camera_frames={
-                "right_side": right_side_frame,
                 "top_down": top_down_frame,
             },
         )
@@ -130,7 +128,7 @@ def test_front_camera_frame_and_yolo_results_are_published_to_dashboard() -> Non
         deadline = time.monotonic() + 3.0
         camera_frames = {
             name: runtime.camera_frame(name)
-            for name in ("front", "right_side", "top_down")
+            for name in ("front", "top_down")
         }
         while (
             not all(camera_frames.values())
@@ -139,16 +137,15 @@ def test_front_camera_frame_and_yolo_results_are_published_to_dashboard() -> Non
             time.sleep(0.01)
             camera_frames = {
                 name: runtime.camera_frame(name)
-                for name in ("front", "right_side", "top_down")
+                for name in ("front", "top_down")
             }
 
         assert all(camera_frames.values())
         assert all(
             camera_frames[name][1].startswith(b"\xff\xd8")
-            for name in ("front", "right_side", "top_down")
+            for name in ("front", "top_down")
         )
         assert runtime.camera_status()["cameras"]["front"]["frame_id"] == 123
-        assert runtime.camera_status()["cameras"]["right_side"]["frame_id"] == 123
         assert runtime.camera_status()["cameras"]["top_down"]["frame_id"] == 123
 
         snapshot = runtime.snapshot()[1]

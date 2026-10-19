@@ -9,7 +9,6 @@ test('camera feed uses the configured backend origin and API path', () => {
       status: 'http://localhost:8000/edgeforge/api/v1/simulation/camera/status',
       cameras: {
         front: 'http://localhost:8000/edgeforge/api/v1/simulation/camera/front/stream',
-        right_side: 'http://localhost:8000/edgeforge/api/v1/simulation/camera/right_side/stream',
         top_down: 'http://localhost:8000/edgeforge/api/v1/simulation/camera/top_down/stream',
       },
     },

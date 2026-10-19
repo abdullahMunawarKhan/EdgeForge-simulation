@@ -152,10 +152,15 @@ test('live client can start and stop simulation via API', async () => {
   }
 
   const client = createLiveSimulationClient('http://localhost:8123', fetchMock)
-  const startRes = await client.startSimulation({ backend: 'mock' })
+  const startRes = await client.startSimulation({
+    backend: 'carla',
+    scenario: { traffic_density: 'Moderate' },
+  })
   assert.equal(startRes.status, 'started')
   assert.equal(requests[0].method, 'POST')
   assert.equal(requests[0].pathname, '/api/v1/simulation/start')
+  assert.equal(requests[0].body.backend, 'carla')
+  assert.equal(requests[0].body.scenario.traffic_density, 'Moderate')
 
   const stopRes = await client.stopSimulation()
   assert.equal(stopRes.status, 'stopped')

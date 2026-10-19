@@ -1,0 +1,16 @@
+{
+  "runs": {
+    "bb3609f5810f4916bf488d763a1d703d": {
+      "f1": 1.0,
+      "failure_count": 0,
+      "matched_iou": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "run_id": "bb3609f5810f4916bf488d763a1d703d",
+      "scenario_id": "basic_urban_scenario",
+      "timestamp": "2026-10-17T06:01:56.919045+00:00"
+    }
+  },
+  "updated_at": "2026-10-17T06:01:56.930063+00:00",
+  "version": "1.0"
+}

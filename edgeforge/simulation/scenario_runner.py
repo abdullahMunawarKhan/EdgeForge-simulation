@@ -26,7 +26,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -267,9 +267,17 @@ class ScenarioRunner:
         )
 
         if self._backend == BACKEND_MOCK:
-            self._client: Any = client or MockCarlaClient()
-            self._actor_mgr = MockActorManager(self._client)
-            self._sensor_mgr = MockSensorManager(self._client)
+            if client is None:
+                mock_client = MockCarlaClient()
+            elif isinstance(client, MockCarlaClient):
+                mock_client = client
+            else:
+                raise TypeError(
+                    "The mock backend requires a MockCarlaClient instance."
+                )
+            self._client: Any = mock_client
+            self._actor_mgr = MockActorManager(mock_client)
+            self._sensor_mgr: Any = MockSensorManager(mock_client)
             self._vehicle_to_state_fn = mock_vehicle_to_state
         else:
             self._client = client or CarlaClient()
@@ -347,7 +355,7 @@ class ScenarioRunner:
     @property
     def latest_ground_truth_objects(
         self,
-    ) -> List[DetectedObject | GroundTruthObject]:
+    ) -> Sequence[DetectedObject | GroundTruthObject]:
         """Return image-space ground truth for the active mock or CARLA frame."""
         if self._backend == BACKEND_MOCK:
             return self.latest_mock_ground_truth_detections
@@ -379,6 +387,17 @@ class ScenarioRunner:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
+        """Start the scenario, tearing down partial setup if startup fails."""
+        try:
+            self._start()
+        except Exception:
+            try:
+                self.stop()
+            except Exception:
+                logger.exception("Scenario cleanup failed after startup error.")
+            raise
+
+    def _start(self) -> None:
         """Connect backend, build actors + sensors, warm up sensors."""
         if self._started:
             return
@@ -421,17 +440,34 @@ class ScenarioRunner:
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != self._ego_bundle.vehicle.id and "vehicle" in a.type_id
                 ]
-                self._sensor_mgr.update_for_tick(
-                    _warmup_snap.frame,
-                    _warmup_snap.timestamp.elapsed_seconds,
-                    npc_list,
-                )
+                if hasattr(self._sensor_mgr, "update_for_tick"):
+                    self._sensor_mgr.update_for_tick(
+                        _warmup_snap.frame,
+                        _warmup_snap.timestamp.elapsed_seconds,
+                        npc_list,
+                    )
         else:
             self._client.connect()
-            if self._info.map_name:
-                current = self._client.map.name.rsplit("/", 1)[-1]
-                if self._info.map_name != current:
-                    self._client.load_map(self._info.map_name)
+            server_map = (
+                self._client.map.name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                if self._client.map is not None
+                else ""
+            )
+            map_req = str(self._info.map_name or "").strip()
+            if map_req and map_req.lower() not in ("current", "active", "none"):
+                target_clean = map_req.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+                if server_map.lower() != target_clean:
+                    logger.info(
+                        f"🗺  Requested map '{map_req}' differs from server map '{server_map}'; loading..."
+                    )
+                    self._client.load_map(map_req)
+                else:
+                    logger.info(
+                        f"🗺  Active map matches requested map '{server_map}'; skipping reload."
+                    )
+            else:
+                logger.info(f"🗺  Using CARLA server's active map: '{server_map}'")
+                self._info.map_name = server_map
 
             self._client.set_synchronous_mode(True, fixed_delta_seconds=0.05)
             if hasattr(self._client, "set_weather"):
@@ -536,7 +572,8 @@ class ScenarioRunner:
                     a for a in self._client._actors.values()  # noqa: SLF001
                     if a.alive and a.id != ego.id and "vehicle" in a.type_id
                 ]
-                self._sensor_mgr.update_for_tick(frame_number, timestamp_s, npc_list)
+                if hasattr(self._sensor_mgr, "update_for_tick"):
+                    self._sensor_mgr.update_for_tick(frame_number, timestamp_s, npc_list)
             else:
                 snap: WorldSnapshot = self._client.tick()
                 frame_number = snap.frame

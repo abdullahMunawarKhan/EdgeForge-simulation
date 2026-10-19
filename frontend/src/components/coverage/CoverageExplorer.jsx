@@ -70,6 +70,17 @@ export function CoverageExplorer({
   if (historyState !== 'demo') {
     const coverage = historyData?.coverage ?? {}
     const conditionCoverage = coverage.condition_coverage ?? {}
+    const persistedRuns = Array.isArray(historyData?.runs) ? historyData.runs : []
+    const scenarioMetricDefinitions = [
+      { key: 'collision_count', label: 'Collisions', format: (value) => String(value) },
+      { key: 'lane_invasion_count', label: 'Lane invasions', format: (value) => String(value) },
+      { key: 'max_risk_score', label: 'Peak risk', format: (value) => value.toFixed(2) },
+      {
+        key: 'time_above_threshold',
+        label: 'Time above risk threshold',
+        format: (value) => `${value.toFixed(1)} s`,
+      },
+    ]
     return (
       <PageSection id="coverage">
         <div className="mb-6">
@@ -130,6 +141,52 @@ export function CoverageExplorer({
                   ))}
                 </dl>
               )}
+            </div>
+            <div className="mt-5 rounded-lg border border-border-subtle bg-surface/70 p-4">
+              <h3 className="text-sm font-semibold text-text">Completed run evaluation metrics</h3>
+              {persistedRuns.length === 0 ? (
+                <p className="mt-2 text-xs text-text-muted">
+                  No completed runs are available.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {persistedRuns.map((run, index) => {
+                    const metrics =
+                      run.scenario_metrics && typeof run.scenario_metrics === 'object' &&
+                      !Array.isArray(run.scenario_metrics)
+                        ? run.scenario_metrics
+                        : {}
+                    return (
+                      <div
+                        key={run.run_id ?? `${run.scenario_id ?? 'run'}-${index}`}
+                        className="rounded border border-border-subtle p-3"
+                      >
+                        <div className="text-xs font-medium text-text">
+                          {run.run_id ?? 'Run ID unavailable'}
+                          {run.scenario_id ? ` · ${run.scenario_id}` : ''}
+                        </div>
+                        <dl className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                          {scenarioMetricDefinitions.map(({ key, label, format }) => {
+                            const value = metrics[key]
+                            const available = typeof value === 'number' && Number.isFinite(value)
+                            return (
+                              <div key={key}>
+                                <dt className="text-[11px] text-text-subtle">{label}</dt>
+                                <dd className="mt-1 text-xs font-mono text-text">
+                                  {available ? format(value) : 'Unavailable'}
+                                </dd>
+                              </div>
+                            )
+                          })}
+                        </dl>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-text-muted">
+                Missing values are unavailable; recorded zero values are shown as zero.
+              </p>
             </div>
             <div className="mt-4 text-xs text-text-muted">
               {Array.isArray(coverage.tested_scenarios) && coverage.tested_scenarios.length > 0

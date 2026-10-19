@@ -571,7 +571,7 @@ def test_completed_mock_run_with_missing_risk_data_still_persists(
     }
 
 
-def test_history_reads_legacy_run_without_scenario_metrics(tmp_path) -> None:
+def test_history_reads_legacy_run_without_scenario_metrics(monkeypatch, tmp_path) -> None:
     store = RunHistoryStore(tmp_path / "legacy-history")
     store.run_path("legacy-run").write_text(
         json.dumps(
@@ -588,6 +588,88 @@ def test_history_reads_legacy_run_without_scenario_metrics(tmp_path) -> None:
     legacy_run = store.get_run("legacy-run")
 
     assert legacy_run.scenario_metrics == {}
+    monkeypatch.setattr(api_module, "history_store", store)
+    response = client.get(
+        "/api/v1/simulation/history",
+        params={"run_id": "legacy-run"},
+    )
+    assert response.status_code == 200
+    assert response.json()["runs"][0]["scenario_metrics"] == {}
+
+
+def test_history_api_exposes_scenario_metrics_with_failures_and_coverage(
+    monkeypatch, tmp_path,
+) -> None:
+    store = RunHistoryStore(tmp_path / "scenario-metrics-api-history")
+    run = HistoricalRunRecord(
+        run_id="metrics-api-run",
+        scenario_id="metrics-api-scenario",
+        scenario_conditions={"weather": {"fog_density": 35.0}},
+        scenario_metrics={
+            "collision_count": 0.0,
+            "lane_invasion_count": 2.0,
+            "max_risk_score": 0.0,
+            "time_above_threshold": 0.0,
+        },
+    )
+    failure = PerceptionFailureRecord(
+        failure_id="metrics-api-failure",
+        failure_type="missed_detection",
+        severity="high",
+        object_class="pedestrian",
+        run_id=run.run_id,
+        scenario_id=run.scenario_id,
+    )
+    store.save_run(run, [failure])
+    monkeypatch.setattr(api_module, "history_store", store)
+
+    recommendations_before_metrics_change = client.get(
+        "/api/v1/scenarios/recommendations",
+        params={"count": 4, "seed": 987},
+    ).json()["recommendations"]
+    response = client.get("/api/v1/simulation/history")
+
+    assert response.status_code == 200
+    [api_run] = response.json()["runs"]
+    [api_failure] = response.json()["failures"]
+    assert api_run["run_id"] == "metrics-api-run"
+    assert api_run["scenario_metrics"] == {
+        "collision_count": 0.0,
+        "lane_invasion_count": 2.0,
+        "max_risk_score": 0.0,
+        "time_above_threshold": 0.0,
+    }
+    assert api_failure["failure_id"] == "metrics-api-failure"
+    assert api_failure["fingerprint"]
+    assert response.json()["coverage"]["total_runs"] == 1
+    assert response.json()["coverage"]["total_failures"] == 1
+    assert response.json()["coverage"]["condition_coverage"]["weather.fog_density"] == {
+        "min": 35.0,
+        "max": 35.0,
+        "distinct_count": 1,
+    }
+
+    store.save_run(
+        run.model_copy(update={"scenario_metrics": {
+            "collision_count": 9.0,
+            "lane_invasion_count": 0.0,
+            "max_risk_score": 1.0,
+            "time_above_threshold": 4.0,
+        }}),
+        [failure],
+        overwrite=True,
+    )
+    recommendations_after_metrics_change = client.get(
+        "/api/v1/scenarios/recommendations",
+        params={"count": 4, "seed": 987},
+    ).json()["recommendations"]
+    assert [
+        (item["candidate_id"], item["overall_score"])
+        for item in recommendations_before_metrics_change
+    ] == [
+        (item["candidate_id"], item["overall_score"])
+        for item in recommendations_after_metrics_change
+    ]
 
 
 def test_start_accepts_frontend_scenario_payload_and_can_stop_and_restart(
@@ -987,7 +1069,7 @@ def test_camera_status_is_disconnected_without_a_live_carla_feed() -> None:
     assert response.json()["available"] is False
     assert response.json()["frame_id"] is None
     assert response.json()["fps"] is None
-    assert set(response.json()["cameras"]) == {"front", "right_side", "top_down"}
+    assert set(response.json()["cameras"]) == {"front", "top_down"}
     assert all(
         not camera["available"] for camera in response.json()["cameras"].values()
     )
@@ -1052,10 +1134,9 @@ def test_camera_worker_renders_and_exposes_pipeline_frame() -> None:
     assert runtime.camera_status()["available"] is False
 
 
-def test_camera_worker_publishes_three_same_tick_views() -> None:
-    runtime.start("carla", {"scenario_id": "three-camera-test"})
+def test_camera_worker_publishes_front_and_top_down_same_tick_views() -> None:
+    runtime.start("carla", {"scenario_id": "two-camera-test"})
     front = np.zeros((64, 64, 3), dtype=np.uint8)
-    right_side = np.full((64, 64, 3), 32, dtype=np.uint8)
     top_down = np.full((64, 64, 3), 64, dtype=np.uint8)
     runtime.publish_frame(
         backend="carla",
@@ -1069,12 +1150,11 @@ def test_camera_worker_publishes_three_same_tick_views() -> None:
                 bbox=[8.0, 8.0, 40.0, 40.0],
             )
         ],
-        scenario_conditions={"scenario_id": "three-camera-test"},
+        scenario_conditions={"scenario_id": "two-camera-test"},
         metrics={"frames_processed": 84, "detection_count": 1},
         risk_assessment=None,
         camera_frames={
             "front": front,
-            "right_side": right_side,
             "top_down": top_down,
         },
     )
@@ -1088,29 +1168,23 @@ def test_camera_worker_publishes_three_same_tick_views() -> None:
         time.sleep(0.01)
         statuses = runtime.camera_status()["cameras"]
 
-    assert set(statuses) == {"front", "right_side", "top_down"}
+    assert set(statuses) == {"front", "top_down"}
     assert all(status["available"] for status in statuses.values())
     assert {status["frame_id"] for status in statuses.values()} == {84}
     assert all(runtime.camera_frame(name) is not None for name in statuses)
     api_status = client.get("/api/v1/simulation/camera/status").json()
-    assert api_status["cameras"]["right_side"]["frame_id"] == 84
     assert api_status["cameras"]["top_down"]["frame_id"] == 84
 
     front_jpeg = runtime.camera_frame("front")[1]
-    side_jpeg = runtime.camera_frame("right_side")[1]
     top_jpeg = runtime.camera_frame("top_down")[1]
     front_image = cv2.imdecode(
         np.frombuffer(front_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
     )
-    side_image = cv2.imdecode(
-        np.frombuffer(side_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
-    )
     top_image = cv2.imdecode(
         np.frombuffer(top_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
     )
-    assert front_image is not None and side_image is not None and top_image is not None
+    assert front_image is not None and top_image is not None
     assert int(front_image[8, 20, 1]) > 120
-    assert int(side_image[8, 20, 1]) < 120
     assert int(top_image[8, 20, 1]) < 120
 
     response = asyncio.run(get_camera_view_stream("top_down"))

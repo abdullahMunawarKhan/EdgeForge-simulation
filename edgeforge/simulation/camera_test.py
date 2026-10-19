@@ -57,7 +57,7 @@ def main():
             carla.Location(x=1.5, z=2.4)
         )
 
-        camera = world.spawn_actor(
+        camera: carla.Sensor = world.spawn_actor(  # type: ignore[assignment]
             camera_bp,
             camera_transform,
             attach_to=vehicle,

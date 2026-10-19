@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-try:
+if TYPE_CHECKING:
     import carla
-except ImportError:
-    carla = None  # type: ignore[assignment]
+else:
+    try:
+        import carla
+    except ImportError:
+        carla = None
 
 from edgeforge.utils import get_logger
 
@@ -188,6 +191,14 @@ class ActorManager:
         self._rng.shuffle(spawn_points)
 
         bps = list(bp_lib.filter(filter_pattern))
+        if kind == "vehicle":
+            four_wheelers = [
+                bp for bp in bps
+                if bp.has_attribute("number_of_wheels")
+                and int(bp.get_attribute("number_of_wheels")) == 4
+            ]
+            if four_wheelers:
+                bps = four_wheelers
         # For bicycles we want *only* the two-wheeled ones; the pattern
         # may also match motorcycles – that's fine, treat them as peers.
         if not bps:
@@ -256,9 +267,12 @@ class ActorManager:
             if walker is None:
                 continue
 
-            controller = world.spawn_actor(
+            controller = world.try_spawn_actor(
                 controller_bp, carla.Transform(), attach_to=walker
             )
+            if controller is None:
+                walker.destroy()
+                continue
             self._client.register_actor(walker)
             self._client.register_actor(controller)
 
@@ -288,6 +302,8 @@ class ActorManager:
         for ctrl in self._traffic.walkers_controllers:
             if ctrl.is_alive:
                 try:
-                    ctrl.stop()
+                    stop_fn = getattr(ctrl, "stop", None)
+                    if callable(stop_fn):
+                        stop_fn()
                 except Exception:
                     pass
